@@ -1,0 +1,437 @@
+# OpenAPI spec for the conference backend — the single source of truth for the
+# reshaped API (see .claude/PLAN.md). The frontend should generate its types
+# from this file instead of hand-writing interfaces, which eliminates the
+# number-vs-string id mismatch class of bug (FE.md 3.2).
+#
+# Conventions locked across every endpoint:
+#   - camelCase JSON, string ids everywhere, ISO-8601 instants WITH a real
+#     offset (never a naive/Z string).
+#   - Collections are always arrays (never null); optional scalars are omitted
+#     when empty (never "").
+#   - Timestamps are anchored to the event's `timezone` (also in the payload).
+openapi: 3.0.3
+info:
+  title: WSO2Con Conference Backend
+  version: "1.0.0"
+  description: >
+    Conference data, attendee/networking, favorites, feedback and AI-feature
+    endpoints. All routes except /health require the `x-jwt-assertion` header.
+servers:
+  - url: /
+security:
+  - jwtAssertion: []
+tags:
+  - name: sessions
+  - name: events
+  - name: speakers
+  - name: attendees
+  - name: connections
+  - name: favorites
+  - name: recommendations
+
+paths:
+  /health:
+    get:
+      tags: [events]
+      summary: Liveness/readiness probe (unauthenticated)
+      security: []
+      responses:
+        "200": { description: OK }
+
+  /sessions/current:
+    get:
+      tags: [sessions]
+      summary: All sessions in the current conference, ordered by start time
+      description: >
+        Returns every session in the latest-start_date conference as Session
+        objects (the same shape the agenda endpoints use), ordered by start
+        time. Includes speaker-less sessions (breaks/registration). Carries
+        ETag/Cache-Control validators.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ETag: { schema: { type: string } }
+            Cache-Control: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Session" }
+        "304": { description: Not Modified }
+
+  /sessions/{id}:
+    get:
+      tags: [sessions]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "304": { description: Not Modified }
+        "404": { description: No such session }
+
+  /events:
+    get:
+      tags: [events]
+      parameters:
+        - name: previous
+          in: query
+          required: false
+          schema: { type: boolean }
+          description: When `true`, returns only non-current events (history modal).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Event" }
+        "304": { description: Not Modified }
+
+  /events/{eventId}/agendas:
+    get:
+      tags: [events]
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema: { type: string }
+          description: A conference_config id, or the literal `current`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EventAgenda" }
+        "304": { description: Not Modified }
+
+  /event-agendas:
+    get:
+      tags: [events]
+      description: Query-param variant of the agenda resource.
+      parameters:
+        - { name: isCurrent, in: query, required: false, schema: { type: boolean } }
+        - { name: eventId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EventAgenda" }
+        "400": { description: Neither eventId nor isCurrent=true supplied }
+
+  /speakers:
+    get:
+      tags: [speakers]
+      parameters:
+        - name: eventId
+          in: query
+          required: false
+          schema: { type: string }
+          description: Restrict to speakers with a session in this conference (and show only those sessions).
+        - name: q
+          in: query
+          required: false
+          schema: { type: string }
+          description: Case-insensitive substring match on speaker name (matched server-side after decryption).
+      responses:
+        "200":
+          description: OK, ordered by name
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SpeakerSummary" }
+        "304": { description: Not Modified }
+
+  /speakers/{id}:
+    get:
+      tags: [speakers]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Speaker" }
+        "404": { description: No such visible speaker }
+
+  /attendees/search:
+    post:
+      tags: [attendees]
+      summary: Cursor-paginated attendee search (server-side filtering)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                uuid: { type: string, description: Optional single-attendee lookup by idp uuid. }
+                query: { type: string, description: Case-insensitive substring over name/company/title (decrypted server-side). }
+                cursor: { type: string, description: Opaque nextCursor from a prior page. }
+                limit: { type: integer, default: 20, maximum: 100 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttendeeSearchResult" }
+        "400": { description: Invalid cursor or negative limit }
+
+  /users/me/favorites:
+    get:
+      tags: [favorites]
+      summary: The caller's favorite session references (resolve against live session data)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Favorite" }
+
+  /users/me/favorites/{sessionId}:
+    put:
+      tags: [favorites]
+      summary: Add a favorite (idempotent)
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Added (or already present) }
+        "400": { description: Malformed sessionId }
+    delete:
+      tags: [favorites]
+      summary: Remove a favorite (idempotent)
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed (or was not present) }
+        "400": { description: Malformed sessionId }
+
+  /users/me/connections:
+    get:
+      tags: [connections]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserConnectionsInfo" }
+    post:
+      tags: [connections]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, status]
+              properties:
+                userId: { type: string }
+                status: { type: integer, enum: [-1, 0, 1], description: "-1 rejected, 0 pending, 1 accepted" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectionUserInfo" }
+
+  /agenda/recommendations:
+    get:
+      tags: [recommendations]
+      summary: Personalized "Picked for You" sessions, day-associated server-side
+      description: >
+        Proxies the external picked-for-you service and enriches each item with
+        this backend's real `dayId` (conference_days uuid) so the client no
+        longer intersects recommendation ids against the loaded agenda.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PickedForYouSession" }
+
+  /app-configs:
+    get:
+      tags: [events]
+      summary: Key/value app configuration
+      description: >
+        Includes the single documented cache-invalidation signal `cacheVersion`
+        (see .claude/PLAN.md Phase G). No write route exists in this service;
+        values are seeded via SQL.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    key: { type: string }
+                    value: { type: string }
+
+components:
+  securitySchemes:
+    jwtAssertion:
+      type: apiKey
+      in: header
+      name: x-jwt-assertion
+  schemas:
+    Session:
+      type: object
+      required: [id, kind, title, durationSlots, speakers]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, description: "keynote | session | break" }
+        title: { type: string }
+        description: { type: string }
+        category: { type: string }
+        startTime: { type: string, format: date-time, description: ISO-8601 with venue offset }
+        endTime: { type: string, format: date-time }
+        dayId: { type: string, format: uuid }
+        trackId: { type: string, format: uuid }
+        trackColor: { type: string, description: Semantic track colour (tracks.color); replaces the FE ROOM_COLOR_MAP. }
+        slotIndex: { type: integer }
+        durationSlots: { type: integer }
+        roomId: { type: string, format: uuid }
+        roomName: { type: string }
+        articleUrl: { type: string }
+        articleLabel: { type: string }
+        videoUrl: { type: string }
+        videoLabel: { type: string }
+        speakers:
+          type: array
+          items: { $ref: "#/components/schemas/SessionSpeaker" }
+    SessionSpeaker:
+      type: object
+      required: [id, name, isModerator]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        photoUrl: { type: string }
+        isModerator: { type: boolean, description: From the owned presentation_overlay; replaces the FE moderators.json. }
+    Event:
+      type: object
+      required: [id, name, isCurrent, timezone]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        isCurrent: { type: boolean }
+        timezone: { type: string, description: "IANA venue timezone (conference_config.timezone) the instants are expressed in." }
+        venueName: { type: string, description: From conference_config.venue_name; omitted when unset. }
+        venueAddress: { type: string, description: From conference_config.venue_address; omitted when unset. }
+    EventAgenda:
+      type: object
+      required: [id, eventId, timezone, date, sessions]
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        timezone: { type: string }
+        name: { type: string }
+        date: { type: string, format: date }
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/Session" }
+    Speaker:
+      type: object
+      required: [id, name, bio, photoUrl]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        bio: { type: string }
+        photoUrl: { type: string }
+    SpeakerSummary:
+      type: object
+      required: [id, name, bio, photoUrl, sessions]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        bio: { type: string }
+        photoUrl: { type: string }
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/SpeakerSession" }
+    SpeakerSession:
+      type: object
+      required: [id, title]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        startTime: { type: string, format: date-time }
+        endTime: { type: string, format: date-time }
+    AttendeeSearchResult:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Attendee" }
+        page:
+          type: object
+          properties:
+            nextCursor: { type: string, description: Empty when this is the last page. }
+    Attendee:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        firstName: { type: string }
+        lastName: { type: string }
+        company: { type: string }
+        title: { type: string }
+        country: { type: string }
+        isPartner: { type: boolean }
+        profileUrl: { type: string }
+        qrUri: { type: string }
+    Favorite:
+      type: object
+      required: [sessionId, createdAt]
+      properties:
+        sessionId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    UserConnectionsInfo:
+      type: object
+      properties:
+        connections: { type: array, items: { $ref: "#/components/schemas/ConnectionUserInfo" } }
+        requestsSent: { type: array, items: { $ref: "#/components/schemas/ConnectionUserInfo" } }
+        requestsReceived: { type: array, items: { $ref: "#/components/schemas/ConnectionUserInfo" } }
+    ConnectionUserInfo:
+      type: object
+      required: [userId, name, email, status]
+      properties:
+        userId: { type: string }
+        name: { type: string }
+        email: { type: string }
+        status: { type: string, enum: [pending, accepted, rejected] }
+        profileUrl: { type: string }
+        title: { type: string }
+        company: { type: string }
+        country: { type: string }
+    PickedForYouSession:
+      type: object
+      description: External recommendation, day-associated with `dayId` server-side.
+      properties:
+        id: { type: string }
+        title: { type: string }
+        personalizedDescription: { type: string }
+        dayId: { type: string, format: uuid, description: This backend's conference_days id; empty if the session id didn't resolve. }
