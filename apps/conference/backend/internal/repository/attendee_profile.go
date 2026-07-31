@@ -214,8 +214,9 @@ const (
 // stable SQL ordering available, since name/company/title are encrypted at
 // rest. filter.Query filters on the decrypted name/company/title in Go (an SQL
 // ILIKE over the ciphertext is meaningless -- same deviation speakers made in
-// Phase B), so when a query is set the scan walks the keyset range and stops as
-// soon as the page is full rather than bounding the read with a SQL LIMIT.
+// Phase B). That splits the read in two: with no query the page is bounded by a
+// SQL LIMIT, and with one the scan walks the keyset range and stops as soon as
+// the page is full, because how many rows are needed isn't knowable in SQL.
 // filter.Cursor is the opaque position returned as the previous page's
 // NextCursor; a malformed cursor yields ErrInvalidCursor.
 func (r *AttendeeProfileRepo) Search(ctx context.Context, filter models.AttendeeSearchFilter, excludedUUID string) (models.AttendeeSearchResult, error) {
@@ -250,18 +251,29 @@ func (r *AttendeeProfileRepo) Search(ctx context.Context, filter models.Attendee
 		args = append(args, cursorTime, cursorID)
 	}
 
+	q := strings.ToLower(strings.TrimSpace(filter.Query))
+
 	query := `SELECT id, email, idp_uuid, member_id, title, company, country,
 	        first_name, last_name, is_partner, profile_url,
 	        created_by, updated_by, created_at, updated_at
 	 FROM attendees WHERE ` + where + `
 	 ORDER BY created_at, id`
+
+	// Without a text query every row matches, so a page is exactly the first
+	// limit+1 rows in keyset order and the planner can serve a bounded top-N off
+	// attendees_created_at_id_idx instead of sorting the whole table. With a
+	// query the match runs in Go after decryption, so SQL can't know how many
+	// rows are needed to fill a page and the scan has to stop early instead.
+	if q == "" {
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		args = append(args, limit+1)
+	}
+
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return models.AttendeeSearchResult{}, err
 	}
 	defer rows.Close()
-
-	q := strings.ToLower(strings.TrimSpace(filter.Query))
 
 	// Collect one more than the page size: the extra match tells us a further
 	// page exists (and supplies its cursor) without a trailing empty page.
@@ -344,16 +356,21 @@ func encodeAttendeeCursor(createdAt time.Time, id string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
-// decodeAttendeeCursor reverses encodeAttendeeCursor. Any malformed input
-// (bad base64, missing separator, unparseable time) is reported as
-// ErrInvalidCursor so the handler can answer 400 rather than 500.
+// decodeAttendeeCursor reverses encodeAttendeeCursor. Any malformed input (bad
+// base64, missing separator, unparseable time, id that isn't a UUID) is
+// reported as ErrInvalidCursor so the handler can answer 400 rather than 500.
+//
+// The id has to be checked against uuidPattern, not just for emptiness:
+// attendees.id is a UUID column, so a decodable cursor carrying a non-UUID id
+// would otherwise reach Postgres and fail the cast in the (created_at, id)
+// comparison, turning malformed client input into a 500.
 func decodeAttendeeCursor(cursor string) (time.Time, string, error) {
 	b, err := base64.RawURLEncoding.DecodeString(cursor)
 	if err != nil {
 		return time.Time{}, "", ErrInvalidCursor
 	}
 	createdAt, id, ok := strings.Cut(string(b), "|")
-	if !ok || id == "" {
+	if !ok || !uuidPattern.MatchString(id) {
 		return time.Time{}, "", ErrInvalidCursor
 	}
 	t, err := time.Parse(time.RFC3339Nano, createdAt)

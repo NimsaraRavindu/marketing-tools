@@ -411,6 +411,51 @@ func TestAttendeeProfileRepo_Search_CursorPaginationIsStableAndComplete(t *testi
 	}
 }
 
+func TestAttendeeProfileRepo_Search_UnfilteredPageIsBoundedAndReportsMore(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAttendeeProfileRepo(testDB, attendeeProfileTestKey)
+
+	selfUUID := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("self-%s@example.com", newUUID()), FirstName: "Self",
+	}, selfUUID)
+	for i := 0; i < 3; i++ {
+		newAttendeeFixture(t, ctx, models.AttendeeInsert{
+			Email: fmt.Sprintf("bounded-%s@example.com", newUUID()),
+		}, newUUID())
+	}
+
+	// The no-query path bounds the read with a SQL LIMIT of limit+1. The +1 is
+	// what tells us another page exists, so it has to survive: a LIMIT of exactly
+	// `limit` would silently strand the remaining rows with an empty NextCursor.
+	// Not asserting total coverage here, since without a query the search spans
+	// every attendee in the shared database.
+	first, err := repo.Search(ctx, models.AttendeeSearchFilter{Limit: 2}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(first.Items) != 2 {
+		t.Fatalf("Items = %d, want exactly the limit of 2", len(first.Items))
+	}
+	if first.Page.NextCursor == "" {
+		t.Fatal("NextCursor is empty, want a cursor since more attendees exist")
+	}
+
+	second, err := repo.Search(ctx, models.AttendeeSearchFilter{Limit: 2, Cursor: first.Page.NextCursor}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	seen := make(map[string]bool, len(first.Items))
+	for _, a := range first.Items {
+		seen[a.ID] = true
+	}
+	for _, a := range second.Items {
+		if seen[a.ID] {
+			t.Errorf("attendee %s appeared on both pages", a.ID)
+		}
+	}
+}
+
 func TestAttendeeProfileRepo_Search_InvalidCursorReturnsErrInvalidCursor(t *testing.T) {
 	ctx := context.Background()
 	repo := NewAttendeeProfileRepo(testDB, attendeeProfileTestKey)
