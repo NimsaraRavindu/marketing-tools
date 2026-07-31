@@ -27,8 +27,19 @@ import (
 )
 
 // AgendaRecommendations handles GET /agenda/recommendations. The external
-// picked-for-you service returns fully-formed session objects itself, so no
-// DB enrichment happens here at all (see .claude/PLAN.md).
+// picked-for-you service returns fully-formed session objects, which this
+// backend then DAY-ASSOCIATES: each recommendation's session id is resolved
+// against marketingops.sessions to attach the real conference_days id (Phase
+// E), so the client stops intersecting recommendation ids against the loaded
+// agenda to figure out each session's day (and stops silently dropping ones it
+// can't place -- FE.md 3.7).
+//
+// This assumes the external service's PickedForYouSession.ID is a marketingops
+// session uuid. That correspondence can't be verified until a real
+// picked-for-you backend exists (none does in any environment yet), so
+// enrichment is best-effort: an id that doesn't resolve just keeps an empty
+// dayId, and if no sessionDays reader is wired the response passes through
+// unchanged.
 func (h *AIAgentHandler) AgendaRecommendations(c *gin.Context) {
 	user := middleware.UserInfoFromContext(c.Request.Context())
 	if user == nil {
@@ -45,5 +56,25 @@ func (h *AIAgentHandler) AgendaRecommendations(c *gin.Context) {
 	if sessions == nil {
 		sessions = []models.PickedForYouSession{}
 	}
+
+	if h.sessionDays != nil && len(sessions) > 0 {
+		ids := make([]string, len(sessions))
+		for i := range sessions {
+			ids[i] = sessions[i].ID
+		}
+		dayBySession, err := h.sessionDays.DayIDsForSessions(c.Request.Context(), ids)
+		if err != nil {
+			// Enrichment is best-effort: log and return the un-enriched
+			// recommendations rather than failing the whole request.
+			slog.WarnContext(c.Request.Context(), "day-associating recommendations failed", "error", err)
+		} else {
+			for i := range sessions {
+				if dayID, ok := dayBySession[sessions[i].ID]; ok {
+					sessions[i].DayID = dayID
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, sessions)
 }

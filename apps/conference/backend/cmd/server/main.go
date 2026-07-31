@@ -119,7 +119,7 @@ func main() {
 	connectionHandler := handlers.NewConnectionHandler(connectionRepo, attendeeProfileRepo)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackRepo, eventRepo)
 	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
-	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus)
+	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
 
 	r := gin.New()
 

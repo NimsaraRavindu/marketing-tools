@@ -28,7 +28,7 @@ import (
 )
 
 func TestAIAgentHandler_PersonalizedProfile_Unauthenticated(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{})
@@ -55,7 +55,7 @@ func TestAIAgentHandler_PersonalizedProfile_PassesThroughRawResponse(t *testing.
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(strings.NewReader(tt.body)),
 			}}
-			h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+			h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 			r := newAIAgentTestRouter(h, testUser)
 
 			w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{Email: "a@wso2.com"})
@@ -73,7 +73,7 @@ func TestAIAgentHandler_PersonalizedProfile_PassesThroughRawResponse(t *testing.
 }
 
 func TestAIAgentHandler_PersonalizedProfile_ClientCallFailure_Returns500(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{profileErr: errBoom}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{profileErr: errBoom}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{})
@@ -83,7 +83,7 @@ func TestAIAgentHandler_PersonalizedProfile_ClientCallFailure_Returns500(t *test
 }
 
 func TestAIAgentHandler_PersonalizedProfile_MalformedBody_Returns400(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	req := httptest.NewRequest(http.MethodPost, "/users/profile", strings.NewReader("{not json"))

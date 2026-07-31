@@ -137,16 +137,23 @@ type PickedForYouSessionSpeaker struct {
 // but always-present fields (never omitted), matching the old `string?`
 // (not `string?`-optional) Ballerina fields.
 type PickedForYouSession struct {
-	ID                      string                       `json:"id"`
-	Title                   string                       `json:"title"`
-	Description             string                       `json:"description"`
-	Category                string                       `json:"category"`
-	StartTime               string                       `json:"startTime"`
-	EndTime                 string                       `json:"endTime"`
-	IsFeedbackNotified      bool                         `json:"isFeedbackNotified"`
-	LocationID              string                       `json:"locationId"`
-	VenueID                 string                       `json:"venueId"`
-	AgendaID                int                          `json:"agendaId"`
+	ID                 string `json:"id"`
+	Title              string `json:"title"`
+	Description        string `json:"description"`
+	Category           string `json:"category"`
+	StartTime          string `json:"startTime"`
+	EndTime            string `json:"endTime"`
+	IsFeedbackNotified bool   `json:"isFeedbackNotified"`
+	LocationID         string `json:"locationId"`
+	VenueID            string `json:"venueId"`
+	AgendaID           int    `json:"agendaId"`
+	// DayID is this backend's real conference_days uuid for the session,
+	// enriched server-side (Phase E) by resolving the recommendation's session
+	// id against marketingops.sessions. It lets the client associate a
+	// recommendation with a day directly instead of intersecting recommendation
+	// ids against the loaded agenda (FE.md 3.7). Empty when the external
+	// service's session id doesn't resolve to a scheduled session here.
+	DayID                   string                       `json:"dayId,omitempty"`
 	YoutubeLink             *string                      `json:"youtubeLink"`
 	SlidesLink              *string                      `json:"slidesLink"`
 	PDFLink                 *string                      `json:"pdfLink"`
