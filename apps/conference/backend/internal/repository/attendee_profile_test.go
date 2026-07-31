@@ -421,6 +421,57 @@ func TestAttendeeProfileRepo_Search_InvalidCursorReturnsErrInvalidCursor(t *test
 	}
 }
 
+func TestAttendeeProfileRepo_Search_ExcludesAttendeesWithNoIDPUUID(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAttendeeProfileRepo(testDB, attendeeProfileTestKey)
+
+	selfUUID := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("self-%s@example.com", newUUID()), FirstName: "Self",
+	}, selfUUID)
+
+	// The repo's Insert always writes the caller's JWT sub, so it can't produce a
+	// NULL idp_uuid; a registration import can, so write the row directly. company
+	// is stored as ciphertext and the query match decrypts it, so the token has to
+	// go in encrypted for the search to have any chance of matching this row --
+	// otherwise the test would pass whether or not the row was correctly excluded.
+	const companyToken = "TddNoUuidUniqueCo"
+	encryptedCompany, err := repo.encrypt(companyToken)
+	if err != nil {
+		t.Fatalf("encrypt returned error: %v", err)
+	}
+	orphanEmail := fmt.Sprintf("no-uuid-%s@example.com", newUUID())
+	if _, err := testDB.Exec(ctx,
+		`INSERT INTO attendees (email, idp_uuid, company) VALUES ($1, NULL, $2)`,
+		orphanEmail, encryptedCompany,
+	); err != nil {
+		t.Fatalf("inserting attendee with NULL idp_uuid returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.Exec(context.Background(), "DELETE FROM attendees WHERE email = $1", orphanEmail)
+	})
+
+	// A row with no idp_uuid has no uuid to connect to, so it must not surface --
+	// not via a text query, and not via an unfiltered listing either.
+	result, err := repo.Search(ctx, models.AttendeeSearchFilter{Query: companyToken, Limit: 50}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(result.Items) != 0 {
+		t.Errorf("Search(%q) = %+v, want no results (attendee has no idp_uuid)", companyToken, result.Items)
+	}
+
+	all, err := repo.Search(ctx, models.AttendeeSearchFilter{Limit: 100}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	for _, a := range all.Items {
+		if a.Email == orphanEmail {
+			t.Errorf("unfiltered search returned attendee %q, which has no idp_uuid", orphanEmail)
+		}
+	}
+}
+
 func TestAttendeeQRFromMemberID(t *testing.T) {
 	cases := []struct {
 		memberID string

@@ -227,7 +227,15 @@ func (r *AttendeeProfileRepo) Search(ctx context.Context, filter models.Attendee
 		limit = maxAttendeeSearchLimit
 	}
 
-	where := "idp_uuid != $1"
+	// idp_uuid is nullable (migration 003): an attendee imported from
+	// registration has no uuid until their first IdP login. Those rows stay out
+	// of search results on purpose, because a result without a uuid can't be
+	// acted on -- ConnectionUserInfo.UserID and POST /users/me/connections both
+	// key off idp_uuid, and Attendee.IDPUUID is omitempty, so such a row would
+	// arrive with no `uuid` field and no way to connect to it. The IS NOT NULL
+	// states that intent, rather than leaving it to fall out of `NULL != $1`
+	// evaluating to NULL and being filtered as not-true.
+	where := "idp_uuid IS NOT NULL AND idp_uuid != $1"
 	args := []any{excludedUUID}
 	if filter.UUID != "" {
 		where += fmt.Sprintf(" AND idp_uuid = $%d", len(args)+1)
