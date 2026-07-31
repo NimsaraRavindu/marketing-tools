@@ -18,9 +18,11 @@ package repository
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -198,41 +200,85 @@ func (r *AttendeeProfileRepo) PatchByEmail(ctx context.Context, email string, pa
 	return nil
 }
 
-// Search returns attendees excluding excludedUUID, optionally narrowed to a
-// single idp_uuid, paginated. Mirrors the old getAttendees/
-// getConditionQueryForAttendeesSearch behavior.
+// Search page-size defaults for POST /attendees/search.
+const (
+	defaultAttendeeSearchLimit = 20
+	maxAttendeeSearchLimit     = 100
+)
+
+// Search returns attendees excluding excludedUUID (the caller's own row),
+// optionally narrowed to a single idp_uuid, with an optional case-insensitive
+// text query and keyset pagination.
+//
+// Rows are ordered by the plaintext, indexable (created_at, id) -- the only
+// stable SQL ordering available, since name/company/title are encrypted at
+// rest. filter.Query filters on the decrypted name/company/title in Go (an SQL
+// ILIKE over the ciphertext is meaningless -- same deviation speakers made in
+// Phase B). That splits the read in two: with no query the page is bounded by a
+// SQL LIMIT, and with one the scan walks the keyset range and stops as soon as
+// the page is full, because how many rows are needed isn't knowable in SQL.
+// filter.Cursor is the opaque position returned as the previous page's
+// NextCursor; a malformed cursor yields ErrInvalidCursor.
 func (r *AttendeeProfileRepo) Search(ctx context.Context, filter models.AttendeeSearchFilter, excludedUUID string) (models.AttendeeSearchResult, error) {
-	where := "idp_uuid != $1"
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultAttendeeSearchLimit
+	}
+	if limit > maxAttendeeSearchLimit {
+		limit = maxAttendeeSearchLimit
+	}
+
+	// idp_uuid is nullable (migration 003): an attendee imported from
+	// registration has no uuid until their first IdP login. Those rows stay out
+	// of search results on purpose, because a result without a uuid can't be
+	// acted on -- ConnectionUserInfo.UserID and POST /users/me/connections both
+	// key off idp_uuid, and Attendee.IDPUUID is omitempty, so such a row would
+	// arrive with no `uuid` field and no way to connect to it. The IS NOT NULL
+	// states that intent, rather than leaving it to fall out of `NULL != $1`
+	// evaluating to NULL and being filtered as not-true.
+	where := "idp_uuid IS NOT NULL AND idp_uuid != $1"
 	args := []any{excludedUUID}
 	if filter.UUID != "" {
-		where += " AND idp_uuid = $2"
+		where += fmt.Sprintf(" AND idp_uuid = $%d", len(args)+1)
 		args = append(args, filter.UUID)
 	}
-
-	var total int
-	countQuery := "SELECT COUNT(*) FROM attendees WHERE " + where
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return models.AttendeeSearchResult{}, err
+	if filter.Cursor != "" {
+		cursorTime, cursorID, err := decodeAttendeeCursor(filter.Cursor)
+		if err != nil {
+			return models.AttendeeSearchResult{}, err
+		}
+		where += fmt.Sprintf(" AND (created_at, id) > ($%d, $%d)", len(args)+1, len(args)+2)
+		args = append(args, cursorTime, cursorID)
 	}
 
-	limitArg := len(args) + 1
-	offsetArg := len(args) + 2
-	query := fmt.Sprintf(
-		`SELECT id, email, idp_uuid, member_id, title, company, country,
-		        first_name, last_name, is_partner, profile_url,
-		        created_by, updated_by, created_at, updated_at
-		 FROM attendees WHERE %s
-		 ORDER BY id
-		 LIMIT $%d OFFSET $%d`,
-		where, limitArg, offsetArg,
-	)
-	rows, err := r.pool.Query(ctx, query, append(args, filter.ItemsPerPage, filter.StartIndex-1)...)
+	q := strings.ToLower(strings.TrimSpace(filter.Query))
+
+	query := `SELECT id, email, idp_uuid, member_id, title, company, country,
+	        first_name, last_name, is_partner, profile_url,
+	        created_by, updated_by, created_at, updated_at
+	 FROM attendees WHERE ` + where + `
+	 ORDER BY created_at, id`
+
+	// Without a text query every row matches, so a page is exactly the first
+	// limit+1 rows in keyset order and the planner can serve a bounded top-N off
+	// attendees_created_at_id_idx instead of sorting the whole table. With a
+	// query the match runs in Go after decryption, so SQL can't know how many
+	// rows are needed to fill a page and the scan has to stop early instead.
+	if q == "" {
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		args = append(args, limit+1)
+	}
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return models.AttendeeSearchResult{}, err
 	}
 	defer rows.Close()
 
-	attendees := make([]models.Attendee, 0)
+	// Collect one more than the page size: the extra match tells us a further
+	// page exists (and supplies its cursor) without a trailing empty page.
+	items := make([]models.Attendee, 0, limit)
+	hasMore := false
 	for rows.Next() {
 		var a models.Attendee
 		var idpUUID, memberID, title, company, country, firstName, lastName, profileURL, createdBy, updatedBy *string
@@ -263,25 +309,75 @@ func (r *AttendeeProfileRepo) Search(ctx context.Context, filter models.Attendee
 		if updatedBy != nil {
 			a.UpdatedBy = *updatedBy
 		}
-		attendees = append(attendees, a)
+
+		if !attendeeMatchesQuery(a, q) {
+			continue
+		}
+		if len(items) == limit {
+			hasMore = true
+			break
+		}
+		items = append(items, a)
 	}
 	if err := rows.Err(); err != nil {
 		return models.AttendeeSearchResult{}, err
 	}
 
-	itemsPerPage := len(attendees)
-	if filter.StartIndex == 1 && total < filter.ItemsPerPage {
-		itemsPerPage = total
-	} else if filter.StartIndex == 1 {
-		itemsPerPage = filter.ItemsPerPage
+	nextCursor := ""
+	if hasMore {
+		last := items[len(items)-1]
+		nextCursor = encodeAttendeeCursor(last.CreatedAt, last.ID)
 	}
 
 	return models.AttendeeSearchResult{
-		Attendees:    attendees,
-		StartIndex:   filter.StartIndex,
-		ItemsPerPage: itemsPerPage,
-		TotalResults: total,
+		Items: items,
+		Page:  models.PageInfo{NextCursor: nextCursor},
 	}, nil
+}
+
+// attendeeMatchesQuery reports whether a matches the (already lowercased,
+// trimmed) query q as a case-insensitive substring of the attendee's name
+// ("firstName lastName"), company, or title. An empty q matches everything.
+func attendeeMatchesQuery(a models.Attendee, q string) bool {
+	if q == "" {
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(a.FirstName + " " + a.LastName))
+	return strings.Contains(name, q) ||
+		strings.Contains(strings.ToLower(a.Company), q) ||
+		strings.Contains(strings.ToLower(a.Title), q)
+}
+
+// encodeAttendeeCursor packs the keyset position (created_at, id) into an
+// opaque, URL-safe token. The instant is normalized to UTC so the round trip
+// is independent of the connection's session time zone.
+func encodeAttendeeCursor(createdAt time.Time, id string) string {
+	raw := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeAttendeeCursor reverses encodeAttendeeCursor. Any malformed input (bad
+// base64, missing separator, unparseable time, id that isn't a UUID) is
+// reported as ErrInvalidCursor so the handler can answer 400 rather than 500.
+//
+// The id has to be checked against uuidPattern, not just for emptiness:
+// attendees.id is a UUID column, so a decodable cursor carrying a non-UUID id
+// would otherwise reach Postgres and fail the cast in the (created_at, id)
+// comparison, turning malformed client input into a 500.
+func decodeAttendeeCursor(cursor string) (time.Time, string, error) {
+	b, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	createdAt, id, ok := strings.Cut(string(b), "|")
+	if !ok || !uuidPattern.MatchString(id) {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	t, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	return t, id, nil
 }
 
 func (r *AttendeeProfileRepo) encrypt(plaintext string) (string, error) {

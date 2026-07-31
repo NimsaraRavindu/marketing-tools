@@ -69,6 +69,59 @@ func TestEventHandler_List_ReturnsEvents(t *testing.T) {
 	}
 }
 
+func TestEventHandler_List_PreviousTrueReturnsOnlyNonCurrent(t *testing.T) {
+	reader := &fakeEventReader{events: []models.Event{
+		{ID: "current-1", Name: "Latest", IsCurrent: true},
+		{ID: "past-1", Name: "Older", IsCurrent: false},
+		{ID: "past-2", Name: "Oldest", IsCurrent: false},
+	}}
+	h := NewEventHandler(reader)
+	rec := doRequest(newEventTestRouter(h), http.MethodGet, "/events?previous=true", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var got []models.Event
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2 (the current event filtered out)", len(got))
+	}
+	for _, e := range got {
+		if e.IsCurrent {
+			t.Errorf("previous=true returned a current event: %+v", e)
+		}
+	}
+}
+
+func TestEventHandler_List_ParamAbsentReturnsAll(t *testing.T) {
+	reader := &fakeEventReader{events: []models.Event{
+		{ID: "current-1", IsCurrent: true},
+		{ID: "past-1", IsCurrent: false},
+	}}
+	h := NewEventHandler(reader)
+	rec := doRequest(newEventTestRouter(h), http.MethodGet, "/events", nil)
+
+	var got []models.Event
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("len(got) = %d, want 2 (unfiltered)", len(got))
+	}
+}
+
+func TestEventHandler_List_PreviousTrueWithOnlyCurrentReturnsEmptyArray(t *testing.T) {
+	reader := &fakeEventReader{events: []models.Event{{ID: "current-1", IsCurrent: true}}}
+	h := NewEventHandler(reader)
+	rec := doRequest(newEventTestRouter(h), http.MethodGet, "/events?previous=true", nil)
+
+	if body := rec.Body.String(); body != "[]" {
+		t.Errorf("body = %q, want %q", body, "[]")
+	}
+}
+
 func TestEventHandler_List_EmptyResultReturnsEmptyArrayNotNull(t *testing.T) {
 	h := NewEventHandler(&fakeEventReader{events: nil})
 	rec := doRequest(newEventTestRouter(h), http.MethodGet, "/events", nil)

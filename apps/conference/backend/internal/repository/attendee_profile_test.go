@@ -269,31 +269,250 @@ func TestAttendeeProfileRepo_Search_ExcludesSelfAndFiltersByUUID(t *testing.T) {
 	selfUUID := newUUID()
 	targetUUID := newUUID()
 	newAttendeeFixture(t, ctx, models.AttendeeInsert{
-		Email: fmt.Sprintf("self-%s@example.com", newUUID()), FirstName: "Self", MemberID: "m-self",
+		Email: fmt.Sprintf("self-%s@example.com", newUUID()), FirstName: "Self",
 	}, selfUUID)
 	newAttendeeFixture(t, ctx, models.AttendeeInsert{
-		Email: fmt.Sprintf("target-%s@example.com", newUUID()), FirstName: "Target", MemberID: "m-target",
+		Email: fmt.Sprintf("target-%s@example.com", newUUID()), FirstName: "Target",
 	}, targetUUID)
 
-	result, err := repo.Search(ctx, models.AttendeeSearchFilter{UUID: targetUUID, StartIndex: 1, ItemsPerPage: 10}, selfUUID)
+	result, err := repo.Search(ctx, models.AttendeeSearchFilter{UUID: targetUUID, Limit: 10}, selfUUID)
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
-	if result.TotalResults != 1 {
-		t.Fatalf("TotalResults = %d, want 1", result.TotalResults)
+	if len(result.Items) != 1 || result.Items[0].IDPUUID != targetUUID {
+		t.Fatalf("Items = %+v, want exactly the target attendee", result.Items)
 	}
-	if len(result.Attendees) != 1 || result.Attendees[0].IDPUUID != targetUUID {
-		t.Fatalf("Attendees = %+v, want exactly the target attendee", result.Attendees)
+	if result.Page.NextCursor != "" {
+		t.Errorf("NextCursor = %q, want empty (single result fits one page)", result.Page.NextCursor)
 	}
 
 	// Searching for self must never return self, even with no uuid filter.
-	self, err := repo.Search(ctx, models.AttendeeSearchFilter{StartIndex: 1, ItemsPerPage: 1000}, selfUUID)
+	self, err := repo.Search(ctx, models.AttendeeSearchFilter{Limit: 100}, selfUUID)
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
-	for _, a := range self.Attendees {
+	for _, a := range self.Items {
 		if a.IDPUUID == selfUUID {
 			t.Errorf("Search results include the excluded self uuid %q", selfUUID)
+		}
+	}
+}
+
+func TestAttendeeProfileRepo_Search_FiltersByQueryOverEncryptedFields(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAttendeeProfileRepo(testDB, attendeeProfileTestKey)
+
+	selfUUID := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("self-%s@example.com", newUUID()), FirstName: "Self",
+	}, selfUUID)
+
+	// Three attendees that each match a query on a different encrypted column:
+	// name, company, title. All decrypt-then-match in Go.
+	byName := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("a-%s@example.com", newUUID()), FirstName: "Grace", LastName: "TddHopperUnique",
+	}, byName)
+	byCompany := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("b-%s@example.com", newUUID()), FirstName: "Bob", Company: "TddAcmeUniqueCorp",
+	}, byCompany)
+	byTitle := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("c-%s@example.com", newUUID()), FirstName: "Carol", Title: "TddPrincipalUnique",
+	}, byTitle)
+
+	cases := []struct {
+		query    string
+		wantUUID string
+	}{
+		{"tddhopperunique", byName},     // case-insensitive, matches last name
+		{"TddAcmeUnique", byCompany},    // matches company substring
+		{"tddprincipalunique", byTitle}, // matches title
+	}
+	for _, tc := range cases {
+		result, err := repo.Search(ctx, models.AttendeeSearchFilter{Query: tc.query, Limit: 50}, selfUUID)
+		if err != nil {
+			t.Fatalf("Search(%q) returned error: %v", tc.query, err)
+		}
+		if len(result.Items) != 1 || result.Items[0].IDPUUID != tc.wantUUID {
+			t.Errorf("Search(%q) = %+v, want exactly the attendee %s", tc.query, result.Items, tc.wantUUID)
+		}
+	}
+
+	// A query matching none of the fixtures returns an empty (non-nil) slice.
+	none, err := repo.Search(ctx, models.AttendeeSearchFilter{Query: "no-such-attendee-zzz", Limit: 50}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if none.Items == nil || len(none.Items) != 0 {
+		t.Errorf("Items = %v, want a non-nil empty slice", none.Items)
+	}
+}
+
+func TestAttendeeProfileRepo_Search_CursorPaginationIsStableAndComplete(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAttendeeProfileRepo(testDB, attendeeProfileTestKey)
+
+	selfUUID := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("self-%s@example.com", newUUID()), FirstName: "Self",
+	}, selfUUID)
+
+	// Five attendees sharing a unique company token so the search is isolated
+	// from any other rows regardless of what else exists in the shared DB.
+	const companyToken = "TddPaginationUniqueCo"
+	want := make(map[string]bool)
+	for i := 0; i < 5; i++ {
+		u := newUUID()
+		want[u] = true
+		newAttendeeFixture(t, ctx, models.AttendeeInsert{
+			Email:   fmt.Sprintf("page-%s@example.com", newUUID()),
+			Company: companyToken,
+		}, u)
+	}
+
+	seen := make(map[string]bool)
+	cursor := ""
+	pages := 0
+	for {
+		pages++
+		if pages > 10 {
+			t.Fatalf("pagination did not terminate; seen=%v", seen)
+		}
+		result, err := repo.Search(ctx, models.AttendeeSearchFilter{
+			Query: companyToken, Limit: 2, Cursor: cursor,
+		}, selfUUID)
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+		if len(result.Items) > 2 {
+			t.Fatalf("page returned %d items, want <= limit 2", len(result.Items))
+		}
+		for _, a := range result.Items {
+			if seen[a.IDPUUID] {
+				t.Errorf("attendee %s returned on more than one page", a.IDPUUID)
+			}
+			seen[a.IDPUUID] = true
+		}
+		if result.Page.NextCursor == "" {
+			break
+		}
+		cursor = result.Page.NextCursor
+	}
+
+	if len(seen) != len(want) {
+		t.Errorf("paged over %d attendees, want %d", len(seen), len(want))
+	}
+	for u := range want {
+		if !seen[u] {
+			t.Errorf("attendee %s missing from paged results", u)
+		}
+	}
+}
+
+func TestAttendeeProfileRepo_Search_UnfilteredPageIsBoundedAndReportsMore(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAttendeeProfileRepo(testDB, attendeeProfileTestKey)
+
+	selfUUID := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("self-%s@example.com", newUUID()), FirstName: "Self",
+	}, selfUUID)
+	for i := 0; i < 3; i++ {
+		newAttendeeFixture(t, ctx, models.AttendeeInsert{
+			Email: fmt.Sprintf("bounded-%s@example.com", newUUID()),
+		}, newUUID())
+	}
+
+	// The no-query path bounds the read with a SQL LIMIT of limit+1. The +1 is
+	// what tells us another page exists, so it has to survive: a LIMIT of exactly
+	// `limit` would silently strand the remaining rows with an empty NextCursor.
+	// Not asserting total coverage here, since without a query the search spans
+	// every attendee in the shared database.
+	first, err := repo.Search(ctx, models.AttendeeSearchFilter{Limit: 2}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(first.Items) != 2 {
+		t.Fatalf("Items = %d, want exactly the limit of 2", len(first.Items))
+	}
+	if first.Page.NextCursor == "" {
+		t.Fatal("NextCursor is empty, want a cursor since more attendees exist")
+	}
+
+	second, err := repo.Search(ctx, models.AttendeeSearchFilter{Limit: 2, Cursor: first.Page.NextCursor}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	seen := make(map[string]bool, len(first.Items))
+	for _, a := range first.Items {
+		seen[a.ID] = true
+	}
+	for _, a := range second.Items {
+		if seen[a.ID] {
+			t.Errorf("attendee %s appeared on both pages", a.ID)
+		}
+	}
+}
+
+func TestAttendeeProfileRepo_Search_InvalidCursorReturnsErrInvalidCursor(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAttendeeProfileRepo(testDB, attendeeProfileTestKey)
+
+	_, err := repo.Search(ctx, models.AttendeeSearchFilter{Cursor: "!!!not-base64!!!", Limit: 10}, newUUID())
+	if !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("Search error = %v, want ErrInvalidCursor", err)
+	}
+}
+
+func TestAttendeeProfileRepo_Search_ExcludesAttendeesWithNoIDPUUID(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAttendeeProfileRepo(testDB, attendeeProfileTestKey)
+
+	selfUUID := newUUID()
+	newAttendeeFixture(t, ctx, models.AttendeeInsert{
+		Email: fmt.Sprintf("self-%s@example.com", newUUID()), FirstName: "Self",
+	}, selfUUID)
+
+	// The repo's Insert always writes the caller's JWT sub, so it can't produce a
+	// NULL idp_uuid; a registration import can, so write the row directly. company
+	// is stored as ciphertext and the query match decrypts it, so the token has to
+	// go in encrypted for the search to have any chance of matching this row --
+	// otherwise the test would pass whether or not the row was correctly excluded.
+	const companyToken = "TddNoUuidUniqueCo"
+	encryptedCompany, err := repo.encrypt(companyToken)
+	if err != nil {
+		t.Fatalf("encrypt returned error: %v", err)
+	}
+	orphanEmail := fmt.Sprintf("no-uuid-%s@example.com", newUUID())
+	if _, err := testDB.Exec(ctx,
+		`INSERT INTO attendees (email, idp_uuid, company) VALUES ($1, NULL, $2)`,
+		orphanEmail, encryptedCompany,
+	); err != nil {
+		t.Fatalf("inserting attendee with NULL idp_uuid returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.Exec(context.Background(), "DELETE FROM attendees WHERE email = $1", orphanEmail)
+	})
+
+	// A row with no idp_uuid has no uuid to connect to, so it must not surface --
+	// not via a text query, and not via an unfiltered listing either.
+	result, err := repo.Search(ctx, models.AttendeeSearchFilter{Query: companyToken, Limit: 50}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(result.Items) != 0 {
+		t.Errorf("Search(%q) = %+v, want no results (attendee has no idp_uuid)", companyToken, result.Items)
+	}
+
+	all, err := repo.Search(ctx, models.AttendeeSearchFilter{Limit: 100}, selfUUID)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	for _, a := range all.Items {
+		if a.Email == orphanEmail {
+			t.Errorf("unfiltered search returned attendee %q, which has no idp_uuid", orphanEmail)
 		}
 	}
 }

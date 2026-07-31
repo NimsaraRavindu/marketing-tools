@@ -85,10 +85,8 @@ func TestAttendee_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 
 func TestAttendeeSearchResult_JSONShape(t *testing.T) {
 	r := AttendeeSearchResult{
-		Attendees:    []Attendee{{ID: "attendee-1", Email: "ada@example.com"}},
-		StartIndex:   1,
-		ItemsPerPage: 10,
-		TotalResults: 1,
+		Items: []Attendee{{ID: "attendee-1", Email: "ada@example.com"}},
+		Page:  PageInfo{NextCursor: "opaque-token"},
 	}
 
 	b, err := json.Marshal(r)
@@ -96,15 +94,40 @@ func TestAttendeeSearchResult_JSONShape(t *testing.T) {
 		t.Fatalf("Marshal returned error: %v", err)
 	}
 
-	var got map[string]any
+	var got struct {
+		Items []map[string]any `json:"items"`
+		Page  map[string]any   `json:"page"`
+	}
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
 
-	for _, key := range []string{"attendees", "startIndex", "itemsPerPage", "totalResults"} {
-		if _, ok := got[key]; !ok {
-			t.Errorf("expected JSON key %q, got keys %v", key, got)
+	if len(got.Items) != 1 {
+		t.Errorf("items = %v, want one element", got.Items)
+	}
+	if _, ok := got.Page["nextCursor"]; !ok {
+		t.Errorf("expected page.nextCursor key, got %v", got.Page)
+	}
+	// The old startIndex/itemsPerPage/totalResults shape must be gone.
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	for _, gone := range []string{"attendees", "startIndex", "itemsPerPage", "totalResults"} {
+		if _, ok := raw[gone]; ok {
+			t.Errorf("expected legacy key %q to be gone, got %v", gone, raw)
 		}
+	}
+}
+
+func TestAttendeeSearchResult_EmptyItemsMarshalToArrayNotNull(t *testing.T) {
+	r := AttendeeSearchResult{Items: []Attendee{}, Page: PageInfo{}}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if got := string(b); got != `{"items":[],"page":{"nextCursor":""}}` {
+		t.Errorf("body = %q, want empty items array and empty nextCursor", got)
 	}
 }
 
