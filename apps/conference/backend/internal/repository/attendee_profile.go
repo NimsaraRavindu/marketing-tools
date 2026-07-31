@@ -18,9 +18,11 @@ package repository
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -198,41 +200,65 @@ func (r *AttendeeProfileRepo) PatchByEmail(ctx context.Context, email string, pa
 	return nil
 }
 
-// Search returns attendees excluding excludedUUID, optionally narrowed to a
-// single idp_uuid, paginated. Mirrors the old getAttendees/
-// getConditionQueryForAttendeesSearch behavior.
+// Search page-size defaults for POST /attendees/search.
+const (
+	defaultAttendeeSearchLimit = 20
+	maxAttendeeSearchLimit     = 100
+)
+
+// Search returns attendees excluding excludedUUID (the caller's own row),
+// optionally narrowed to a single idp_uuid, with an optional case-insensitive
+// text query and keyset pagination.
+//
+// Rows are ordered by the plaintext, indexable (created_at, id) -- the only
+// stable SQL ordering available, since name/company/title are encrypted at
+// rest. filter.Query filters on the decrypted name/company/title in Go (an SQL
+// ILIKE over the ciphertext is meaningless -- same deviation speakers made in
+// Phase B), so when a query is set the scan walks the keyset range and stops as
+// soon as the page is full rather than bounding the read with a SQL LIMIT.
+// filter.Cursor is the opaque position returned as the previous page's
+// NextCursor; a malformed cursor yields ErrInvalidCursor.
 func (r *AttendeeProfileRepo) Search(ctx context.Context, filter models.AttendeeSearchFilter, excludedUUID string) (models.AttendeeSearchResult, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultAttendeeSearchLimit
+	}
+	if limit > maxAttendeeSearchLimit {
+		limit = maxAttendeeSearchLimit
+	}
+
 	where := "idp_uuid != $1"
 	args := []any{excludedUUID}
 	if filter.UUID != "" {
-		where += " AND idp_uuid = $2"
+		where += fmt.Sprintf(" AND idp_uuid = $%d", len(args)+1)
 		args = append(args, filter.UUID)
 	}
-
-	var total int
-	countQuery := "SELECT COUNT(*) FROM attendees WHERE " + where
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return models.AttendeeSearchResult{}, err
+	if filter.Cursor != "" {
+		cursorTime, cursorID, err := decodeAttendeeCursor(filter.Cursor)
+		if err != nil {
+			return models.AttendeeSearchResult{}, err
+		}
+		where += fmt.Sprintf(" AND (created_at, id) > ($%d, $%d)", len(args)+1, len(args)+2)
+		args = append(args, cursorTime, cursorID)
 	}
 
-	limitArg := len(args) + 1
-	offsetArg := len(args) + 2
-	query := fmt.Sprintf(
-		`SELECT id, email, idp_uuid, member_id, title, company, country,
-		        first_name, last_name, is_partner, profile_url,
-		        created_by, updated_by, created_at, updated_at
-		 FROM attendees WHERE %s
-		 ORDER BY id
-		 LIMIT $%d OFFSET $%d`,
-		where, limitArg, offsetArg,
-	)
-	rows, err := r.pool.Query(ctx, query, append(args, filter.ItemsPerPage, filter.StartIndex-1)...)
+	query := `SELECT id, email, idp_uuid, member_id, title, company, country,
+	        first_name, last_name, is_partner, profile_url,
+	        created_by, updated_by, created_at, updated_at
+	 FROM attendees WHERE ` + where + `
+	 ORDER BY created_at, id`
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return models.AttendeeSearchResult{}, err
 	}
 	defer rows.Close()
 
-	attendees := make([]models.Attendee, 0)
+	q := strings.ToLower(strings.TrimSpace(filter.Query))
+
+	// Collect one more than the page size: the extra match tells us a further
+	// page exists (and supplies its cursor) without a trailing empty page.
+	items := make([]models.Attendee, 0, limit)
+	hasMore := false
 	for rows.Next() {
 		var a models.Attendee
 		var idpUUID, memberID, title, company, country, firstName, lastName, profileURL, createdBy, updatedBy *string
@@ -263,25 +289,70 @@ func (r *AttendeeProfileRepo) Search(ctx context.Context, filter models.Attendee
 		if updatedBy != nil {
 			a.UpdatedBy = *updatedBy
 		}
-		attendees = append(attendees, a)
+
+		if !attendeeMatchesQuery(a, q) {
+			continue
+		}
+		if len(items) == limit {
+			hasMore = true
+			break
+		}
+		items = append(items, a)
 	}
 	if err := rows.Err(); err != nil {
 		return models.AttendeeSearchResult{}, err
 	}
 
-	itemsPerPage := len(attendees)
-	if filter.StartIndex == 1 && total < filter.ItemsPerPage {
-		itemsPerPage = total
-	} else if filter.StartIndex == 1 {
-		itemsPerPage = filter.ItemsPerPage
+	nextCursor := ""
+	if hasMore {
+		last := items[len(items)-1]
+		nextCursor = encodeAttendeeCursor(last.CreatedAt, last.ID)
 	}
 
 	return models.AttendeeSearchResult{
-		Attendees:    attendees,
-		StartIndex:   filter.StartIndex,
-		ItemsPerPage: itemsPerPage,
-		TotalResults: total,
+		Items: items,
+		Page:  models.PageInfo{NextCursor: nextCursor},
 	}, nil
+}
+
+// attendeeMatchesQuery reports whether a matches the (already lowercased,
+// trimmed) query q as a case-insensitive substring of the attendee's name
+// ("firstName lastName"), company, or title. An empty q matches everything.
+func attendeeMatchesQuery(a models.Attendee, q string) bool {
+	if q == "" {
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(a.FirstName + " " + a.LastName))
+	return strings.Contains(name, q) ||
+		strings.Contains(strings.ToLower(a.Company), q) ||
+		strings.Contains(strings.ToLower(a.Title), q)
+}
+
+// encodeAttendeeCursor packs the keyset position (created_at, id) into an
+// opaque, URL-safe token. The instant is normalized to UTC so the round trip
+// is independent of the connection's session time zone.
+func encodeAttendeeCursor(createdAt time.Time, id string) string {
+	raw := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeAttendeeCursor reverses encodeAttendeeCursor. Any malformed input
+// (bad base64, missing separator, unparseable time) is reported as
+// ErrInvalidCursor so the handler can answer 400 rather than 500.
+func decodeAttendeeCursor(cursor string) (time.Time, string, error) {
+	b, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	createdAt, id, ok := strings.Cut(string(b), "|")
+	if !ok || id == "" {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	t, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	return t, id, nil
 }
 
 func (r *AttendeeProfileRepo) encrypt(plaintext string) (string, error) {

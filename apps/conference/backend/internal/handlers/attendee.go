@@ -155,7 +155,11 @@ func (h *AttendeeHandler) Profile(c *gin.Context) {
 	})
 }
 
-// Search handles POST /attendees/search, excluding the caller's own uuid.
+// Search handles POST /attendees/search, excluding the caller's own uuid. It
+// takes an optional text query and cursor pagination and returns the
+// { items, page: { nextCursor } } envelope. The heavy lifting (text filtering
+// over encrypted columns, keyset paging) lives in the repository so the client
+// stops downloading the full attendee list and filtering in the browser.
 func (h *AttendeeHandler) Search(c *gin.Context) {
 	user := middleware.UserInfoFromContext(c.Request.Context())
 	if user == nil {
@@ -163,30 +167,36 @@ func (h *AttendeeHandler) Search(c *gin.Context) {
 		return
 	}
 
-	var filter models.AttendeeSearchFilter
 	var body struct {
-		UUID         *string `json:"uuid"`
-		StartIndex   int     `json:"startIndex"`
-		ItemsPerPage int     `json:"itemsPerPage"`
+		UUID   *string `json:"uuid"`
+		Query  string  `json:"query"`
+		Cursor string  `json:"cursor"`
+		Limit  int     `json:"limit"`
 	}
-	body.StartIndex = 1
-	body.ItemsPerPage = 1000
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid request body"})
 		return
 	}
-	if body.StartIndex < 1 || body.ItemsPerPage < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "startIndex and itemsPerPage must be positive"})
+	if body.Limit < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "limit must not be negative"})
 		return
+	}
+
+	filter := models.AttendeeSearchFilter{
+		Query:  body.Query,
+		Cursor: body.Cursor,
+		Limit:  body.Limit,
 	}
 	if body.UUID != nil {
 		filter.UUID = *body.UUID
 	}
-	filter.StartIndex = body.StartIndex
-	filter.ItemsPerPage = body.ItemsPerPage
 
 	result, err := h.repo.Search(c.Request.Context(), filter, user.UserID)
 	if err != nil {
+		if errors.Is(err, repository.ErrInvalidCursor) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "invalid cursor"})
+			return
+		}
 		slog.ErrorContext(c.Request.Context(), "searching attendees failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "internal error"})
 		return

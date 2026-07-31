@@ -258,14 +258,15 @@ func TestAttendeeHandler_Search_Unauthenticated(t *testing.T) {
 	}
 }
 
-func TestAttendeeHandler_Search_ReturnsResult(t *testing.T) {
+func TestAttendeeHandler_Search_ReturnsEnvelope(t *testing.T) {
 	repo := &fakeAttendeeRepo{searchResult: models.AttendeeSearchResult{
-		Attendees: []models.Attendee{{ID: "attendee-2"}}, TotalResults: 1, StartIndex: 1, ItemsPerPage: 1,
+		Items: []models.Attendee{{ID: "attendee-2"}},
+		Page:  models.PageInfo{NextCursor: "next-token"},
 	}}
 	h := NewAttendeeHandler(repo)
 	r := newAttendeeTestRouter(h, testUser)
 
-	w := doRequest(r, http.MethodPost, "/attendees/search", map[string]any{"uuid": "target-uuid"})
+	w := doRequest(r, http.MethodPost, "/attendees/search", map[string]any{"uuid": "target-uuid", "query": "ada"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
@@ -274,7 +275,42 @@ func TestAttendeeHandler_Search_ReturnsResult(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if got.TotalResults != 1 {
-		t.Errorf("TotalResults = %d, want 1", got.TotalResults)
+	if len(got.Items) != 1 || got.Items[0].ID != "attendee-2" {
+		t.Errorf("Items = %+v, want the single attendee-2", got.Items)
+	}
+	if got.Page.NextCursor != "next-token" {
+		t.Errorf("Page.NextCursor = %q, want %q", got.Page.NextCursor, "next-token")
+	}
+}
+
+func TestAttendeeHandler_Search_InvalidCursorIsBadRequest(t *testing.T) {
+	repo := &fakeAttendeeRepo{searchErr: repository.ErrInvalidCursor}
+	h := NewAttendeeHandler(repo)
+	r := newAttendeeTestRouter(h, testUser)
+
+	w := doRequest(r, http.MethodPost, "/attendees/search", map[string]any{"cursor": "!!!not-base64!!!"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+}
+
+func TestAttendeeHandler_Search_NegativeLimitIsBadRequest(t *testing.T) {
+	h := NewAttendeeHandler(&fakeAttendeeRepo{})
+	r := newAttendeeTestRouter(h, testUser)
+
+	w := doRequest(r, http.MethodPost, "/attendees/search", map[string]any{"limit": -5})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAttendeeHandler_Search_RepoErrorMapsTo500(t *testing.T) {
+	repo := &fakeAttendeeRepo{searchErr: errBoom}
+	h := NewAttendeeHandler(repo)
+	r := newAttendeeTestRouter(h, testUser)
+
+	w := doRequest(r, http.MethodPost, "/attendees/search", map[string]any{})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
 	}
 }

@@ -43,7 +43,13 @@ func NewEventHandler(reader EventReader) *EventHandler {
 	return &EventHandler{reader: reader}
 }
 
-// List handles GET /events.
+// List handles GET /events. With ?previous=true it returns only the
+// non-current events (every event whose IsCurrent is false) for the
+// events-history modal, so the client stops filtering previous events in the
+// browser. Any other value, or the param's absence, returns all events
+// unchanged. "Current" stays defined in one place -- the repository's
+// latest-start_date rule -- and this only filters on the IsCurrent flag it
+// already computes.
 func (h *EventHandler) List(c *gin.Context) {
 	events, err := h.reader.GetEvents(c.Request.Context())
 	if err != nil {
@@ -51,6 +57,17 @@ func (h *EventHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "internal error"})
 		return
 	}
+
+	if c.Query("previous") == "true" {
+		previous := make([]models.Event, 0, len(events))
+		for _, e := range events {
+			if !e.IsCurrent {
+				previous = append(previous, e)
+			}
+		}
+		events = previous
+	}
+
 	if events == nil {
 		events = []models.Event{}
 	}

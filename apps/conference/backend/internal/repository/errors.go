@@ -23,6 +23,12 @@ import "errors"
 // for the query being performed, e.g. an unscheduled session).
 var ErrNotFound = errors.New("not found")
 
+// ErrInvalidCursor is returned by paginated repository methods when the
+// opaque pagination cursor supplied by the client cannot be decoded. Handlers
+// map it to 400 Bad Request rather than 500, since it's a malformed client
+// input, not an internal fault.
+var ErrInvalidCursor = errors.New("invalid pagination cursor")
+
 // ErrDuplicateAllocation is returned by CoinAllocationRepo.Insert when the
 // (qr_id, user_uuid) unique constraint is violated. Insert can hit this even
 // after a preceding Exists check passed, since two concurrent scans of the

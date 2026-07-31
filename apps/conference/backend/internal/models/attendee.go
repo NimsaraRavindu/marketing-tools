@@ -69,19 +69,38 @@ type AttendeePatch struct {
 }
 
 // AttendeeSearchFilter narrows POST /attendees/search: an optional single
-// uuid to look up, plus pagination.
+// uuid to look up, an optional case-insensitive text query, and cursor
+// pagination.
+//
+// Query matches (case-insensitive substring) against the attendee's name
+// ("firstName lastName"), company, or title. All three are AES-GCM encrypted
+// at rest, so the match runs in Go after decryption -- an SQL ILIKE over the
+// ciphertext would be meaningless (the same constraint speakers hit in Phase
+// B). Cursor is the opaque keyset position; Limit is the page size (0 means
+// "use the repository default").
 type AttendeeSearchFilter struct {
-	UUID         string
-	StartIndex   int
-	ItemsPerPage int
+	UUID   string
+	Query  string
+	Cursor string
+	Limit  int
 }
 
 // AttendeeSearchResult is the paginated response for POST /attendees/search.
+// Items is always a non-nil array. Page.NextCursor is empty when there are no
+// further pages. total is deliberately omitted: an accurate count over the
+// text query would require decrypting every attendee row (see PageInfo).
 type AttendeeSearchResult struct {
-	Attendees    []Attendee `json:"attendees"`
-	StartIndex   int        `json:"startIndex"`
-	ItemsPerPage int        `json:"itemsPerPage"`
-	TotalResults int        `json:"totalResults"`
+	Items []Attendee `json:"items"`
+	Page  PageInfo   `json:"page"`
+}
+
+// PageInfo is the pagination envelope shared by cursor-paginated list
+// responses. NextCursor is an opaque token to pass back as the next request's
+// cursor; an empty string means the last page has been reached. total is not
+// included: attendee search filters over encrypted columns in Go, so an exact
+// filtered total isn't cheaply computable, and the plan marks total optional.
+type PageInfo struct {
+	NextCursor string `json:"nextCursor"`
 }
 
 // Profile is the response shape for GET /user-profile.
