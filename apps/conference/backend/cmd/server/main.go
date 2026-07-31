@@ -93,6 +93,7 @@ func main() {
 	connectionRepo := repository.NewConnectionRepo(pool, attendeeProfileRepo)
 	feedbackRepo := repository.NewFeedbackRepo(pool)
 	appConfigRepo := repository.NewAppConfigRepo(pool)
+	favoritesRepo := repository.NewFavoritesRepo(pool)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
@@ -117,6 +118,7 @@ func main() {
 	eventHandler := handlers.NewEventHandler(eventRepo)
 	attendeeHandler := handlers.NewAttendeeHandler(attendeeProfileRepo)
 	connectionHandler := handlers.NewConnectionHandler(connectionRepo, attendeeProfileRepo)
+	favoritesHandler := handlers.NewFavoritesHandler(favoritesRepo)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackRepo, eventRepo)
 	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus)
@@ -126,7 +128,8 @@ func main() {
 	if cfg.AppEnv == "development" {
 		r.Use(func(c *gin.Context) {
 			c.Header("Access-Control-Allow-Origin", "*")
-			c.Header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+			// PUT/DELETE back favorites; PATCH backs the attendee update.
+			c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 			c.Header("Access-Control-Allow-Headers", "Content-Type,x-jwt-assertion")
 			if c.Request.Method == http.MethodOptions {
 				c.AbortWithStatus(http.StatusNoContent)
@@ -175,6 +178,10 @@ func main() {
 
 		api.GET("/users/me/connections", connectionHandler.Get)
 		api.POST("/users/me/connections", connectionHandler.Create)
+
+		api.GET("/users/me/favorites", favoritesHandler.List)
+		api.PUT("/users/me/favorites/:sessionId", favoritesHandler.Add)
+		api.DELETE("/users/me/favorites/:sessionId", favoritesHandler.Remove)
 
 		api.POST("/feedback", feedbackHandler.Create)
 

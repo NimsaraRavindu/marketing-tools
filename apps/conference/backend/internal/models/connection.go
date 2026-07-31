@@ -36,12 +36,31 @@ func (s ConnectionStatus) IsValid() bool {
 	}
 }
 
+// String is the JSON-facing label for a connection status, so responses carry
+// the state explicitly instead of encoding it only via which array an item
+// sits in.
+func (s ConnectionStatus) String() string {
+	switch s {
+	case ConnectionRejected:
+		return "rejected"
+	case ConnectionPending:
+		return "pending"
+	case ConnectionAccepted:
+		return "accepted"
+	default:
+		return "unknown"
+	}
+}
+
 // ConnectionUserInfo describes the other party in a connection, enriched
-// from that user's attendee profile.
+// from that user's attendee profile. Status is the explicit connection state
+// ("pending"/"accepted"), always present so the client reads it directly
+// rather than inferring it from which array the item sits in.
 type ConnectionUserInfo struct {
 	UserID     string `json:"userId"`
 	Name       string `json:"name"`
 	Email      string `json:"email"`
+	Status     string `json:"status"`
 	ProfileURL string `json:"profileUrl,omitempty"`
 	Title      string `json:"title,omitempty"`
 	Company    string `json:"company,omitempty"`

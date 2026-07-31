@@ -82,6 +82,9 @@ func TestConnectionRepo_Upsert_PendingRequestAppearsAsSentAndReceived(t *testing
 	if aliceView.RequestsSent[0].Name != "Bob Receiver" {
 		t.Errorf("alice.RequestsSent[0].Name = %q, want %q", aliceView.RequestsSent[0].Name, "Bob Receiver")
 	}
+	if aliceView.RequestsSent[0].Status != "pending" {
+		t.Errorf("alice.RequestsSent[0].Status = %q, want %q", aliceView.RequestsSent[0].Status, "pending")
+	}
 
 	bobView, err := repo.Get(ctx, bob)
 	if err != nil {
@@ -116,6 +119,9 @@ func TestConnectionRepo_Upsert_AcceptedAppearsAsConnectionForBoth(t *testing.T) 
 	}
 	if len(aliceView.Connections) != 1 || aliceView.Connections[0].UserID != bob {
 		t.Errorf("alice.Connections = %+v, want exactly bob", aliceView.Connections)
+	}
+	if aliceView.Connections[0].Status != "accepted" {
+		t.Errorf("alice.Connections[0].Status = %q, want %q", aliceView.Connections[0].Status, "accepted")
 	}
 	if len(aliceView.RequestsSent) != 0 {
 		t.Errorf("alice.RequestsSent = %+v, want empty once accepted", aliceView.RequestsSent)

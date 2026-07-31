@@ -117,7 +117,10 @@ func TestConnectionHandler_Create_Unauthenticated(t *testing.T) {
 func TestConnectionHandler_Create_UpsertsAndReturnsTargetInfo(t *testing.T) {
 	connReader := &fakeConnectionReader{}
 	attendees := &fakeAttendeeRepo{byUUID: map[string]models.Attendee{
-		"user-2": {ID: "attendee-2", Email: "bob@example.com", FirstName: "Bob", LastName: "Receiver"},
+		"user-2": {
+			ID: "attendee-2", Email: "bob@example.com", FirstName: "Bob", LastName: "Receiver",
+			ProfileURL: "https://example.com/bob", Title: "Engineer", Company: "Acme", Country: "LK",
+		},
 	}}
 	h := NewConnectionHandler(connReader, attendees)
 	r := newConnectionTestRouter(h, testUser)
@@ -140,6 +143,16 @@ func TestConnectionHandler_Create_UpsertsAndReturnsTargetInfo(t *testing.T) {
 	}
 	if got.Email != "bob@example.com" {
 		t.Errorf("Email = %q, want %q", got.Email, "bob@example.com")
+	}
+	// Parity with GET: POST must return the enriched fields it already fetched.
+	if got.Status != "pending" {
+		t.Errorf("Status = %q, want %q", got.Status, "pending")
+	}
+	if got.ProfileURL != "https://example.com/bob" {
+		t.Errorf("ProfileURL = %q, want it echoed from the fetched attendee", got.ProfileURL)
+	}
+	if got.Title != "Engineer" || got.Company != "Acme" || got.Country != "LK" {
+		t.Errorf("title/company/country = %q/%q/%q, want Engineer/Acme/LK", got.Title, got.Company, got.Country)
 	}
 }
 

@@ -91,6 +91,13 @@ type AppConfigReader interface {
 	List(ctx context.Context) ([]models.AppConfig, error)
 }
 
+// FavoritesReader is satisfied by *FavoritesRepo.
+type FavoritesReader interface {
+	List(ctx context.Context, userUUID string) ([]models.Favorite, error)
+	Add(ctx context.Context, userUUID, sessionID string) error
+	Remove(ctx context.Context, userUUID, sessionID string) error
+}
+
 // Compile-time assertions that the concrete repos satisfy their interfaces.
 var (
 	_ AttendeeRepository       = (*AttendeeRepo)(nil)
@@ -103,4 +110,5 @@ var (
 	_ ConnectionReader         = (*ConnectionRepo)(nil)
 	_ FeedbackReader           = (*FeedbackRepo)(nil)
 	_ AppConfigReader          = (*AppConfigRepo)(nil)
+	_ FavoritesReader          = (*FavoritesRepo)(nil)
 )

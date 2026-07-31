@@ -105,6 +105,7 @@ func (r *ConnectionRepo) Get(ctx context.Context, userUUID string) (models.UserC
 		}
 
 		user := models.ConnectionUserInfo{
+			Status:  models.ConnectionStatus(status).String(),
 			Title:   decryptedTitle,
 			Company: decryptedCompany,
 			Country: decryptedCountry,
