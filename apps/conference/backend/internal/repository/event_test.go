@@ -83,7 +83,7 @@ func (f *eventFixture) insertSession(t *testing.T, ctx context.Context, dayID st
 
 func TestEventRepo_GetEvents_OrdersByStartDateDescendingWithLatestCurrent(t *testing.T) {
 	ctx := context.Background()
-	repo := NewEventRepo(testDB, 5, time.UTC, "UTC", speakerTestKey)
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 
 	// Dates far outside any real or other-test data so ordering is
 	// deterministic regardless of what else exists in this shared dev DB.
@@ -119,7 +119,7 @@ func TestEventRepo_GetEvents_OrdersByStartDateDescendingWithLatestCurrent(t *tes
 
 func TestEventRepo_GetEvents_ReadsTimezoneAndVenueColumns(t *testing.T) {
 	ctx := context.Background()
-	repo := NewEventRepo(testDB, 5, time.UTC, "UTC", speakerTestKey)
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 
 	var configID string
 	if err := testDB.QueryRow(ctx,
@@ -160,7 +160,7 @@ func TestEventRepo_GetEvents_ReadsTimezoneAndVenueColumns(t *testing.T) {
 
 func TestEventRepo_GetEventAgendas_ResolvesCurrentToLatestStartDate(t *testing.T) {
 	ctx := context.Background()
-	repo := NewEventRepo(testDB, 5, time.UTC, "UTC", speakerTestKey)
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 
 	older := newEventFixture(t, ctx, "TDD Older Conference", "2020-02-01")
 	older.insertDay(t, ctx, 0, "2020-02-01", "Day 1", 480)
@@ -190,7 +190,7 @@ func TestEventRepo_GetEventAgendas_ResolvesCurrentToLatestStartDate(t *testing.T
 
 func TestEventRepo_GetEventAgendas_ByExplicitEventID(t *testing.T) {
 	ctx := context.Background()
-	repo := NewEventRepo(testDB, 5, time.UTC, "UTC", speakerTestKey)
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 
 	// Even though this config isn't the latest by start_date, requesting it
 	// by explicit id must still return its days.
@@ -221,7 +221,7 @@ func TestEventRepo_GetEventAgendas_ByExplicitEventID(t *testing.T) {
 
 func TestEventRepo_GetEventAgendas_UnknownEventIDReturnsEmptyNoError(t *testing.T) {
 	ctx := context.Background()
-	repo := NewEventRepo(testDB, 5, time.UTC, "UTC", speakerTestKey)
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 
 	agendas, err := repo.GetEventAgendas(ctx, newUUID())
 	if err != nil {
@@ -234,7 +234,7 @@ func TestEventRepo_GetEventAgendas_UnknownEventIDReturnsEmptyNoError(t *testing.
 
 func TestEventRepo_GetEventAgendas_DayWithZeroSessionsHasEmptySessionsArray(t *testing.T) {
 	ctx := context.Background()
-	repo := NewEventRepo(testDB, 5, time.UTC, "UTC", speakerTestKey)
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 
 	fixture := newEventFixture(t, ctx, "TDD Empty Day Conference", "2200-01-01")
 	dayID := fixture.insertDay(t, ctx, 0, "2200-01-01", "Day 1", 480)
@@ -256,7 +256,7 @@ func TestEventRepo_GetEventAgendas_DayWithZeroSessionsHasEmptySessionsArray(t *t
 
 func TestEventRepo_GetEventAgendas_NestedSessionTimeWindowMatchesGetSession(t *testing.T) {
 	ctx := context.Background()
-	eventRepo := NewEventRepo(testDB, 5, time.UTC, "UTC", speakerTestKey)
+	eventRepo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 	sessionRepo := NewSessionRepo(testDB, 5, speakerTestKey, time.UTC)
 
 	fixture := newEventFixture(t, ctx, "TDD Window Match Conference", "2300-01-01")
@@ -282,5 +282,194 @@ func TestEventRepo_GetEventAgendas_NestedSessionTimeWindowMatchesGetSession(t *t
 	}
 	if nested.EndTime == nil || want.EndTime == nil || !nested.EndTime.Equal(*want.EndTime) {
 		t.Errorf("nested EndTime = %v, want %v", nested.EndTime, want.EndTime)
+	}
+}
+
+// A keynote or break has no track, so tracks.color leaves it colourless. The
+// room_colors overlay is what gives it a colour, and this is the case the
+// agendas endpoint was actually missing.
+func TestEventRepo_GetEventAgendas_TracklessSessionStillGetsRoomColor(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	fixture := newEventFixture(t, ctx, "TDD Room Colour Conference", "2301-01-01")
+	dayID := fixture.insertDay(t, ctx, 0, "2301-01-01", "Day 1", 480)
+
+	var roomID string
+	if err := testDB.QueryRow(ctx,
+		"INSERT INTO rooms (config_id, name) VALUES ($1, 'TDD Keynote Room') RETURNING id",
+		fixture.configID,
+	).Scan(&roomID); err != nil {
+		t.Fatalf("failed to insert room: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID) })
+
+	insertRoomColor(t, ctx, roomID, "#08BAF6")
+
+	var sessionID string
+	if err := testDB.QueryRow(ctx,
+		`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index, room_id)
+		 VALUES ($1, 'keynote', 'TDD Trackless Keynote', 6, $2, 0, $3) RETURNING id`,
+		fixture.configID, dayID, roomID,
+	).Scan(&sessionID); err != nil {
+		t.Fatalf("failed to insert session: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM sessions WHERE id = $1", sessionID) })
+
+	agendas, err := repo.GetEventAgendas(ctx, fixture.configID)
+	if err != nil {
+		t.Fatalf("GetEventAgendas returned error: %v", err)
+	}
+	if len(agendas) != 1 || len(agendas[0].Sessions) != 1 {
+		t.Fatalf("agendas = %+v, want one day with one session", agendas)
+	}
+	nested := agendas[0].Sessions[0]
+
+	if nested.RoomColor != "#08BAF6" {
+		t.Errorf("RoomColor = %q, want %q (from room_colors.color)", nested.RoomColor, "#08BAF6")
+	}
+	if nested.TrackColor != "" {
+		t.Errorf("TrackColor = %q, want empty for a session with no track", nested.TrackColor)
+	}
+}
+
+func TestEventRepo_GetEventAgendas_RoomWithNoOverlayRowHasNoRoomColor(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	fixture := newEventFixture(t, ctx, "TDD Uncoloured Room Conference", "2302-01-01")
+	dayID := fixture.insertDay(t, ctx, 0, "2302-01-01", "Day 1", 480)
+
+	var roomID string
+	if err := testDB.QueryRow(ctx,
+		"INSERT INTO rooms (config_id, name) VALUES ($1, 'TDD Uncoloured Room') RETURNING id",
+		fixture.configID,
+	).Scan(&roomID); err != nil {
+		t.Fatalf("failed to insert room: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID) })
+
+	var sessionID string
+	if err := testDB.QueryRow(ctx,
+		`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index, room_id)
+		 VALUES ($1, 'break', 'TDD Uncoloured Break', 6, $2, 0, $3) RETURNING id`,
+		fixture.configID, dayID, roomID,
+	).Scan(&sessionID); err != nil {
+		t.Fatalf("failed to insert session: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM sessions WHERE id = $1", sessionID) })
+
+	agendas, err := repo.GetEventAgendas(ctx, fixture.configID)
+	if err != nil {
+		t.Fatalf("GetEventAgendas returned error: %v", err)
+	}
+	if len(agendas) != 1 || len(agendas[0].Sessions) != 1 {
+		t.Fatalf("agendas = %+v, want one day with one session", agendas)
+	}
+	if got := agendas[0].Sessions[0].RoomColor; got != "" {
+		t.Errorf("RoomColor = %q, want empty for a room with no overlay row", got)
+	}
+}
+
+// track_sections comes in two upstream kinds -- track-scoped ("Case Studies")
+// and day-scoped keynote ones ("Keynote Sessions") -- and both must resolve,
+// since the join is on sessions.section_id and ignores the kind.
+func TestEventRepo_GetEventAgendas_ResolvesTrackGroupForBothSectionKinds(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	fixture := newEventFixture(t, ctx, "TDD Track Group Conference", "2303-01-01")
+	dayID := fixture.insertDay(t, ctx, 0, "2303-01-01", "Day 1", 480)
+
+	var trackID string
+	if err := testDB.QueryRow(ctx,
+		"INSERT INTO tracks (day_id, color, position) VALUES ($1, '#123abc', 0) RETURNING id",
+		dayID,
+	).Scan(&trackID); err != nil {
+		t.Fatalf("failed to insert track: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM tracks WHERE id = $1", trackID) })
+
+	var trackSectionID string
+	if err := testDB.QueryRow(ctx,
+		`INSERT INTO track_sections (track_id, label, start_slot, duration_slots, kind)
+		 VALUES ($1, 'TDD Case Studies', 0, 6, 'track') RETURNING id`,
+		trackID,
+	).Scan(&trackSectionID); err != nil {
+		t.Fatalf("failed to insert track-kind section: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.Exec(context.Background(), "DELETE FROM track_sections WHERE id = $1", trackSectionID)
+	})
+
+	var keynoteSectionID string
+	if err := testDB.QueryRow(ctx,
+		`INSERT INTO track_sections (day_id, label, start_slot, duration_slots, kind)
+		 VALUES ($1, 'TDD Keynote Sessions', 6, 6, 'keynote') RETURNING id`,
+		dayID,
+	).Scan(&keynoteSectionID); err != nil {
+		t.Fatalf("failed to insert keynote-kind section: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.Exec(context.Background(), "DELETE FROM track_sections WHERE id = $1", keynoteSectionID)
+	})
+
+	// The upstream sessions_validate_placement trigger pins each section kind to
+	// a session kind: a track section takes only 'session', a keynote section
+	// only 'keynote'.
+	for _, sec := range []struct {
+		sectionID   string
+		sessionKind string
+		slotIndex   int
+		title       string
+	}{
+		{trackSectionID, "session", 0, "TDD Sectioned Session"},
+		{keynoteSectionID, "keynote", 6, "TDD Sectioned Keynote"},
+	} {
+		var sessionID string
+		if err := testDB.QueryRow(ctx,
+			`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index, section_id)
+			 VALUES ($1, $2, $3, 6, $4, $5, $6) RETURNING id`,
+			fixture.configID, sec.sessionKind, sec.title, dayID, sec.slotIndex, sec.sectionID,
+		).Scan(&sessionID); err != nil {
+			t.Fatalf("failed to insert session: %v", err)
+		}
+		t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM sessions WHERE id = $1", sessionID) })
+	}
+
+	agendas, err := repo.GetEventAgendas(ctx, fixture.configID)
+	if err != nil {
+		t.Fatalf("GetEventAgendas returned error: %v", err)
+	}
+	if len(agendas) != 1 || len(agendas[0].Sessions) != 2 {
+		t.Fatalf("agendas = %+v, want one day with two sessions", agendas)
+	}
+
+	// Ordered by slot_index, so the track-kind section comes first.
+	if got := agendas[0].Sessions[0].TrackGroup; got != "TDD Case Studies" {
+		t.Errorf("TrackGroup = %q, want %q (track-kind section)", got, "TDD Case Studies")
+	}
+	if got := agendas[0].Sessions[1].TrackGroup; got != "TDD Keynote Sessions" {
+		t.Errorf("TrackGroup = %q, want %q (keynote-kind section)", got, "TDD Keynote Sessions")
+	}
+}
+
+func TestEventRepo_GetEventAgendas_SessionWithNoSectionHasNoTrackGroup(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	fixture := newEventFixture(t, ctx, "TDD No Section Conference", "2304-01-01")
+	dayID := fixture.insertDay(t, ctx, 0, "2304-01-01", "Day 1", 480)
+	fixture.insertSession(t, ctx, dayID, 0, 6, "TDD Sectionless Session")
+
+	agendas, err := repo.GetEventAgendas(ctx, fixture.configID)
+	if err != nil {
+		t.Fatalf("GetEventAgendas returned error: %v", err)
+	}
+	if len(agendas) != 1 || len(agendas[0].Sessions) != 1 {
+		t.Fatalf("agendas = %+v, want one day with one session", agendas)
+	}
+	if got := agendas[0].Sessions[0].TrackGroup; got != "" {
+		t.Errorf("TrackGroup = %q, want empty for a session in no section", got)
 	}
 }

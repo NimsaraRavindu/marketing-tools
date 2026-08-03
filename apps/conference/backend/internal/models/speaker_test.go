@@ -24,7 +24,7 @@ import (
 func TestSpeaker_JSONShape(t *testing.T) {
 	s := Speaker{
 		ID:          "speaker-1",
-		Name:        "Jay Howell",
+		Name:        "John Doe",
 		Description: "Principal Engineer",
 		Bio:         "Works on integration.",
 		PhotoURL:    "https://example.com/jay.webp",
@@ -67,10 +67,39 @@ func TestSpeaker_DescriptionOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestSpeakerSummary_JSONShape(t *testing.T) {
+func TestSpeakerSummary_CarriesNoSessions(t *testing.T) {
 	s := SpeakerSummary{
 		ID:       "speaker-1",
-		Name:     "Jay Howell",
+		Name:     "John Doe",
+		Bio:      "Works on integration.",
+		PhotoURL: "https://example.com/jay.webp",
+	}
+
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+
+	// A directory row draws no sessions; they belong to GET /speakers/:id.
+	if _, ok := got["sessions"]; ok {
+		t.Errorf("expected no sessions key on a speaker summary, got %v", got)
+	}
+	for _, key := range []string{"id", "name", "bio", "photoUrl"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("expected JSON key %q, got keys %v", key, got)
+		}
+	}
+}
+
+func TestSpeaker_EmbedsResolvedSessions(t *testing.T) {
+	s := Speaker{
+		ID:       "speaker-1",
+		Name:     "John Doe",
 		Bio:      "Works on integration.",
 		PhotoURL: "https://example.com/jay.webp",
 		Sessions: []SpeakerSession{
@@ -109,8 +138,8 @@ func TestSpeakerSummary_JSONShape(t *testing.T) {
 	}
 }
 
-func TestSpeakerSummary_SessionsAlwaysPresentEvenWhenEmpty(t *testing.T) {
-	s := SpeakerSummary{ID: "speaker-1", Name: "No Sessions Yet", Sessions: []SpeakerSession{}}
+func TestSpeaker_SessionsAlwaysPresentEvenWhenEmpty(t *testing.T) {
+	s := Speaker{ID: "speaker-1", Name: "No Sessions Yet", Sessions: []SpeakerSession{}}
 
 	b, err := json.Marshal(s)
 	if err != nil {

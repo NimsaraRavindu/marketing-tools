@@ -270,7 +270,7 @@ components:
   schemas:
     Session:
       type: object
-      required: [id, kind, title, durationSlots, speakers]
+      required: [id, kind, title, durationSlots]
       properties:
         id: { type: string, format: uuid }
         kind: { type: string, description: "keynote | session | break" }
@@ -281,17 +281,41 @@ components:
         endTime: { type: string, format: date-time }
         dayId: { type: string, format: uuid }
         trackId: { type: string, format: uuid }
-        trackColor: { type: string, description: Semantic track colour (tracks.color); replaces the FE ROOM_COLOR_MAP. }
+        trackColor:
+          type: string
+          description: >-
+            Hex colour of the session's track (tracks.color), e.g. "#2faf5a".
+            Absent when the session has no track — keynotes and breaks
+            typically have none. Use roomColor for those.
+        trackGroup:
+          type: string
+          description: >-
+            Label of the track section the session sits in, e.g. "Case Studies"
+            or "Keynote Sessions" — the heading a run of sessions is grouped
+            under (track_sections.label). Absent when the session belongs to no
+            section.
         slotIndex: { type: integer }
         durationSlots: { type: integer }
         roomId: { type: string, format: uuid }
         roomName: { type: string }
+        roomColor:
+          type: string
+          description: >-
+            Hex colour of the session's room, e.g. "#08BAF6". Covers every room
+            including the ones with no track, so this is the field to colour a
+            session card by; together with roomName it replaces the FE
+            ROOM_COLOR_MAP. Absent when the session has no room.
         articleUrl: { type: string }
         articleLabel: { type: string }
         videoUrl: { type: string }
         videoLabel: { type: string }
         speakers:
           type: array
+          description: >-
+            Present only on the single-session reads (GET /sessions/{id},
+            GET /sessions/current). The agenda endpoints omit it: an agenda
+            card draws no speaker, so a client that wants them opens the
+            session.
           items: { $ref: "#/components/schemas/SessionSpeaker" }
     SessionSpeaker:
       type: object
@@ -299,6 +323,18 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
+        title:
+          type: string
+          description: >-
+            Speaker's job title (speakers.title), decrypted server-side. The
+            /speakers endpoints publish this same column as "description" for
+            legacy reasons. Absent when unset.
+        company:
+          type: string
+          description: >-
+            Speaker's company (speakers.company), decrypted server-side. Rarely
+            populated upstream — the affiliation is usually only a suffix on
+            title — so treat its absence as normal and fall back to title.
         photoUrl: { type: string }
         isModerator: { type: boolean, description: From the owned presentation_overlay; replaces the FE moderators.json. }
     Event:
@@ -325,15 +361,9 @@ components:
           items: { $ref: "#/components/schemas/Session" }
     Speaker:
       type: object
-      required: [id, name, bio, photoUrl]
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        description: { type: string }
-        bio: { type: string }
-        photoUrl: { type: string }
-    SpeakerSummary:
-      type: object
+      description: >-
+        A speaker's full profile, returned by GET /speakers/{id} — everything
+        the speaker detail screen renders, in one document.
       required: [id, name, bio, photoUrl, sessions]
       properties:
         id: { type: string, format: uuid }
@@ -343,7 +373,22 @@ components:
         photoUrl: { type: string }
         sessions:
           type: array
+          description: >-
+            The speaker's sessions in the current conference, resolved
+            server-side. Past conferences are excluded.
           items: { $ref: "#/components/schemas/SpeakerSession" }
+    SpeakerSummary:
+      type: object
+      description: >-
+        One row of the speaker directory, returned by GET /speakers. Carries no
+        sessions — the list never draws them; fetch GET /speakers/{id} for those.
+      required: [id, name, bio, photoUrl]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        bio: { type: string }
+        photoUrl: { type: string }
     SpeakerSession:
       type: object
       required: [id, title]
@@ -357,7 +402,12 @@ components:
           type: string
           description: >-
             Hex colour of the session's track, e.g. "#2faf5a". Absent when the
-            session has no track — colour lives on the track, not the room.
+            session has no track — keynotes and breaks typically have none.
+        roomColor:
+          type: string
+          description: >-
+            Hex colour of the session's room, e.g. "#08BAF6". Mirrors
+            Session.roomColor. Absent when the session has no room.
     AttendeeSearchResult:
       type: object
       required: [items, page]

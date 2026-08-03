@@ -394,6 +394,8 @@ func TestSessionRepo_GetSession_ResolvesTrackColorAndRoomName(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID) })
 
+	insertRoomColor(t, ctx, roomID, "#654cba")
+
 	var sessionID string
 	if err := testDB.QueryRow(ctx,
 		`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index, track_id, room_id)
@@ -414,6 +416,23 @@ func TestSessionRepo_GetSession_ResolvesTrackColorAndRoomName(t *testing.T) {
 	if session.RoomName != "Blue Hall" {
 		t.Errorf("RoomName = %q, want %q (from rooms.name)", session.RoomName, "Blue Hall")
 	}
+	if session.RoomColor != "#654cba" {
+		t.Errorf("RoomColor = %q, want %q (from room_colors.color)", session.RoomColor, "#654cba")
+	}
+}
+
+// insertRoomColor seeds the owned room_colors overlay for one room and cleans
+// it up afterwards.
+func insertRoomColor(t *testing.T, ctx context.Context, roomID, color string) {
+	t.Helper()
+	if _, err := testDB.Exec(ctx,
+		"INSERT INTO room_colors (room_id, color) VALUES ($1, $2)", roomID, color,
+	); err != nil {
+		t.Fatalf("failed to insert room_colors row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.Exec(context.Background(), "DELETE FROM room_colors WHERE room_id = $1", roomID)
+	})
 }
 
 func TestSessionRepo_GetSession_Unscheduled(t *testing.T) {
@@ -656,5 +675,69 @@ func TestSessionRepo_GetTimeWindow_Unscheduled(t *testing.T) {
 	_, _, err := repo.GetTimeWindow(ctx, sessionID)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetTimeWindow(%q) error = %v, want ErrNotFound", sessionID, err)
+	}
+}
+
+// speakers.title and speakers.company are encrypted at rest like name, so the
+// embed has to decrypt them rather than pass the ciphertext through.
+func TestSessionRepo_GetSession_EmbeddedSpeakerTitleAndCompanyAreDecrypted(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSessionRepo(testDB, 5, speakerTestKey, time.UTC)
+
+	sessionID, _ := newConfiguredSessionFixture(t, ctx, "2099-10-01", "2099-10-01", "Speaker Title Session")
+
+	const wantTitle = "Principal Solutions Architect"
+	const wantCompany = "WSO2"
+	var speakerID string
+	if err := testDB.QueryRow(ctx,
+		"INSERT INTO speakers (name, title, company, bio, visible) VALUES ($1, $2, $3, '', true) RETURNING id",
+		mustEncrypt(t, "Titled Speaker"), mustEncrypt(t, wantTitle), mustEncrypt(t, wantCompany),
+	).Scan(&speakerID); err != nil {
+		t.Fatalf("failed to insert test speaker: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM speakers WHERE id = $1", speakerID) })
+
+	if _, err := testDB.Exec(ctx,
+		"INSERT INTO session_speakers (session_id, speaker_id) VALUES ($1, $2)", sessionID, speakerID,
+	); err != nil {
+		t.Fatalf("failed to attach speaker: %v", err)
+	}
+
+	session, err := repo.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetSession returned error: %v", err)
+	}
+	if len(session.Speakers) != 1 {
+		t.Fatalf("Speakers = %+v, want 1", session.Speakers)
+	}
+	if session.Speakers[0].Title != wantTitle {
+		t.Errorf("speaker Title = %q, want %q (decrypted from speakers.title)", session.Speakers[0].Title, wantTitle)
+	}
+	if session.Speakers[0].Company != wantCompany {
+		t.Errorf("speaker Company = %q, want %q (decrypted from speakers.company)", session.Speakers[0].Company, wantCompany)
+	}
+}
+
+// A speaker row with no title stores "" rather than ciphertext and company is
+// left NULL outright. Both absence paths must come back empty, not error.
+func TestSessionRepo_GetSession_EmbeddedSpeakerWithNoTitleOrCompanyIsEmptyNotAnError(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSessionRepo(testDB, 5, speakerTestKey, time.UTC)
+
+	sessionID, _ := newConfiguredSessionFixture(t, ctx, "2099-11-01", "2099-11-01", "Untitled Speaker Session")
+	attachSpeakerToSession(t, ctx, sessionID, "Untitled Speaker")
+
+	session, err := repo.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetSession returned error: %v", err)
+	}
+	if len(session.Speakers) != 1 {
+		t.Fatalf("Speakers = %+v, want 1", session.Speakers)
+	}
+	if session.Speakers[0].Title != "" {
+		t.Errorf("speaker Title = %q, want empty", session.Speakers[0].Title)
+	}
+	if session.Speakers[0].Company != "" {
+		t.Errorf("speaker Company = %q, want empty for a NULL company column", session.Speakers[0].Company)
 	}
 }

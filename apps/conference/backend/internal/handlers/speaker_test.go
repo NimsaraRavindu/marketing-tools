@@ -58,7 +58,7 @@ func newSpeakerTestRouter(h *SpeakerHandler) *gin.Engine {
 func TestSpeakerHandler_List_ReturnsSummaries(t *testing.T) {
 	reader := &fakeSpeakerReader{
 		summary: []models.SpeakerSummary{
-			{ID: "speaker-1", Name: "Jay Howell", Sessions: []models.SpeakerSession{}},
+			{ID: "speaker-1", Name: "John Doe"},
 		},
 	}
 	h := NewSpeakerHandler(reader)
@@ -115,7 +115,7 @@ func TestSpeakerHandler_List_RepositoryErrorReturns500(t *testing.T) {
 }
 
 func TestSpeakerHandler_Get_ReturnsSpeaker(t *testing.T) {
-	reader := &fakeSpeakerReader{speaker: models.Speaker{ID: "speaker-1", Name: "Jay Howell"}}
+	reader := &fakeSpeakerReader{speaker: models.Speaker{ID: "speaker-1", Name: "John Doe"}}
 	h := NewSpeakerHandler(reader)
 	rec := doRequest(newSpeakerTestRouter(h), http.MethodGet, "/speakers/speaker-1", nil)
 

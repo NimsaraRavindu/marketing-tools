@@ -18,21 +18,28 @@ package models
 
 import "time"
 
-// Speaker represents a single conference speaker, as returned by
-// GET /speakers/:id. The old Ballerina schema had a separate email and
-// description column; the new marketingops.speakers table has neither, so
-// email is dropped and Description is populated from the new schema's title
-// column instead (see .claude/PLAN.md).
+// Speaker is a speaker's full profile, as returned by GET /speakers/:id.
+// Everything the speaker detail screen renders is here, including the
+// speaker's sessions, so the client fetches one document per screen instead
+// of joining the speaker list against the agenda itself.
+//
+// The old Ballerina schema had a separate email and description column; the
+// new marketingops.speakers table has neither, so email is dropped and
+// Description is populated from the new schema's title column instead (see
+// .claude/PLAN.md).
 type Speaker struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Bio         string `json:"bio"`
 	PhotoURL    string `json:"photoUrl"`
+	// Sessions the speaker is on in the current conference, resolved
+	// server-side. Always an array, never null.
+	Sessions []SpeakerSession `json:"sessions"`
 }
 
-// SpeakerSession is a session embedded on a speaker in GET /speakers, resolved
-// server-side (title + real times) so SpeakerDetails renders without a client
+// SpeakerSession is a session embedded on a Speaker, resolved server-side
+// (title + real times) so the speaker detail screen renders without a client
 // join back to the sessions it only had ids for (FE.md 3.2). Replaces the old
 // bare {speakerId, sessionId, eventId} reference shape.
 type SpeakerSession struct {
@@ -40,24 +47,28 @@ type SpeakerSession struct {
 	Title     string     `json:"title"`
 	StartTime *time.Time `json:"startTime,omitempty"`
 	EndTime   *time.Time `json:"endTime,omitempty"`
-	// RoomName and TrackColor mirror the same fields on Session so a speaker's
-	// session list renders the same room label and colour as the agenda,
-	// without a second fetch. Both are omitted when the session has no room /
-	// no track: colour lives on tracks.color, so a roomless or trackless
-	// session (breaks, some keynotes) genuinely has none.
+	// RoomName, TrackColor and RoomColor mirror the same fields on Session so a
+	// speaker's session list renders the same room label and colour as the
+	// agenda, without a second fetch. Each is omitted when the session has no
+	// room / no track / no overlay row for its room.
 	RoomName   string `json:"roomName,omitempty"`
 	TrackColor string `json:"trackColor,omitempty"`
+	RoomColor  string `json:"roomColor,omitempty"`
 }
 
-// SpeakerSummary represents one entry of GET /speakers, with each session the
-// speaker is attached to embedded as a resolved SpeakerSession.
+// SpeakerSummary represents one entry of GET /speakers: what a row in the
+// speaker directory renders, and nothing else.
+//
+// It deliberately carries no sessions. The list screen never draws them, and
+// embedding them here is what pushed clients into holding the whole speaker
+// list in memory just to enrich a single speaker later. A client that needs a
+// speaker's sessions fetches GET /speakers/:id.
 type SpeakerSummary struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Description string           `json:"description,omitempty"`
-	Bio         string           `json:"bio"`
-	PhotoURL    string           `json:"photoUrl"`
-	Sessions    []SpeakerSession `json:"sessions"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Bio         string `json:"bio"`
+	PhotoURL    string `json:"photoUrl"`
 }
 
 // SpeakerFilter narrows GET /speakers server-side so the client stops

@@ -58,7 +58,7 @@ func fetchSessionSpeakers(ctx context.Context, pool *pgxpool.Pool, piiKey []byte
 	}
 
 	rows, err := pool.Query(ctx,
-		`SELECT ss.session_id, sp.id, sp.name, sp.photo_url, COALESCE(po.is_moderator, false)
+		`SELECT ss.session_id, sp.id, sp.name, sp.title, sp.company, sp.photo_url, COALESCE(po.is_moderator, false)
 		 FROM session_speakers ss
 		 JOIN speakers sp ON sp.id = ss.speaker_id
 		 LEFT JOIN presentation_overlay po
@@ -72,17 +72,30 @@ func fetchSessionSpeakers(ctx context.Context, pool *pgxpool.Pool, piiKey []byte
 	defer rows.Close()
 
 	for rows.Next() {
-		var sessionID, speakerID, encName string
-		var photoURL *string
+		var sessionID, speakerID, encName, encTitle string
+		var encCompany, photoURL *string
 		var isModerator bool
-		if err := rows.Scan(&sessionID, &speakerID, &encName, &photoURL, &isModerator); err != nil {
+		if err := rows.Scan(&sessionID, &speakerID, &encName, &encTitle, &encCompany, &photoURL, &isModerator); err != nil {
 			return nil, err
 		}
 		name, err := decryptPII(encName, piiKey)
 		if err != nil {
 			return nil, fmt.Errorf("decrypting speaker name: %w", err)
 		}
-		sp := models.SessionSpeaker{ID: speakerID, Name: name, IsModerator: isModerator}
+		title, err := decryptPII(encTitle, piiKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting speaker title: %w", err)
+		}
+		sp := models.SessionSpeaker{ID: speakerID, Name: name, Title: title, IsModerator: isModerator}
+		// Unlike name/title, company is a nullable column, so NULL and "" both
+		// mean "no company" and neither reaches the decrypt.
+		if encCompany != nil {
+			company, err := decryptPII(*encCompany, piiKey)
+			if err != nil {
+				return nil, fmt.Errorf("decrypting speaker company: %w", err)
+			}
+			sp.Company = company
+		}
 		if photoURL != nil {
 			sp.PhotoURL = *photoURL
 		}
