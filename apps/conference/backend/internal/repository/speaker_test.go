@@ -84,6 +84,7 @@ func newSpeakerFixture(t *testing.T, ctx context.Context, name, title, bio, phot
 const (
 	testSpeakerRoomName   = "TDD Speaker Test Room"
 	testSpeakerTrackColor = "#123456"
+	testSpeakerRoomColor  = "#abcdef"
 )
 
 // attachToSession creates a minimal conference_config + room + track +
@@ -91,12 +92,17 @@ const (
 // returning (sessionID, configID) for assertions. The session is left
 // unscheduled (no day_id/slot_index) -- the track needs a day, but the
 // session doesn't sit on one.
+//
+// The conference is dated far in the future so it wins the "current
+// conference = latest start_date" rule GetSpeaker scopes its embedded
+// sessions by. Each fixture config is dropped in cleanup, so only the running
+// test's config holds that position.
 func (f *speakerFixture) attachToSession(t *testing.T, ctx context.Context) (sessionID, configID string) {
 	t.Helper()
 
 	err := testDB.QueryRow(ctx,
 		"INSERT INTO conference_config (name, start_date) VALUES ($1, $2) RETURNING id",
-		"TDD Speaker Test Conference", "2026-08-01",
+		"TDD Speaker Test Conference", "2099-08-01",
 	).Scan(&configID)
 	if err != nil {
 		t.Fatalf("failed to insert test conference_config: %v", err)
@@ -113,6 +119,8 @@ func (f *speakerFixture) attachToSession(t *testing.T, ctx context.Context) (ses
 	if err != nil {
 		t.Fatalf("failed to insert test room: %v", err)
 	}
+
+	insertRoomColor(t, ctx, roomID, testSpeakerRoomColor)
 
 	var dayID string
 	err = testDB.QueryRow(ctx,
@@ -159,14 +167,14 @@ func TestSpeakerRepo_GetSpeaker_DecryptsFields(t *testing.T) {
 	ctx := context.Background()
 	repo := NewSpeakerRepo(testDB, speakerTestKey, 5, time.UTC)
 
-	fixture := newSpeakerFixture(t, ctx, "Jay Howell", "Principal Engineer", "Works on integration.", "https://example.com/jay.webp", true)
+	fixture := newSpeakerFixture(t, ctx, "John Doe", "Principal Engineer", "Works on integration.", "https://example.com/john.webp", true)
 
 	speaker, err := repo.GetSpeaker(ctx, fixture.speakerID)
 	if err != nil {
 		t.Fatalf("GetSpeaker returned error: %v", err)
 	}
-	if speaker.Name != "Jay Howell" {
-		t.Errorf("Name = %q, want %q", speaker.Name, "Jay Howell")
+	if speaker.Name != "John Doe" {
+		t.Errorf("Name = %q, want %q", speaker.Name, "John Doe")
 	}
 	if speaker.Description != "Principal Engineer" {
 		t.Errorf("Description = %q, want %q (mapped from title)", speaker.Description, "Principal Engineer")
@@ -174,8 +182,8 @@ func TestSpeakerRepo_GetSpeaker_DecryptsFields(t *testing.T) {
 	if speaker.Bio != "Works on integration." {
 		t.Errorf("Bio = %q, want %q", speaker.Bio, "Works on integration.")
 	}
-	if speaker.PhotoURL != "https://example.com/jay.webp" {
-		t.Errorf("PhotoURL = %q, want %q", speaker.PhotoURL, "https://example.com/jay.webp")
+	if speaker.PhotoURL != "https://example.com/john.webp" {
+		t.Errorf("PhotoURL = %q, want %q", speaker.PhotoURL, "https://example.com/john.webp")
 	}
 }
 
@@ -228,15 +236,15 @@ func TestSpeakerRepo_GetSpeakerSummary_FiltersToVisibleOnly(t *testing.T) {
 	}
 }
 
-// Scoping by eventId returns only speakers in that conference, each with its
-// sessions embedded as resolved {id, title, ...} objects. Scoping also keeps
-// this test off the shared DB's real (differently-encrypted) speaker rows.
-func TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions(t *testing.T) {
+// Scoping by eventId returns only the speakers in that conference. Scoping
+// also keeps this test off the shared DB's real (differently-encrypted)
+// speaker rows.
+func TestSpeakerRepo_GetSpeakerSummary_ScopedByEvent(t *testing.T) {
 	ctx := context.Background()
 	repo := NewSpeakerRepo(testDB, speakerTestKey, 5, time.UTC)
 
 	fixture := newSpeakerFixture(t, ctx, "Speaker With Session", "", "", "", true)
-	sessionID, configID := fixture.attachToSession(t, ctx)
+	_, configID := fixture.attachToSession(t, ctx)
 
 	summaries, err := repo.GetSpeakerSummary(ctx, models.SpeakerFilter{EventID: configID})
 	if err != nil {
@@ -246,31 +254,99 @@ func TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions(t *te
 	if len(summaries) != 1 {
 		t.Fatalf("len(summaries) = %d, want exactly 1 (scoped to this event)", len(summaries))
 	}
-	s := summaries[0]
-	if s.ID != fixture.speakerID {
-		t.Fatalf("speaker id = %q, want %q", s.ID, fixture.speakerID)
+	if summaries[0].ID != fixture.speakerID {
+		t.Fatalf("speaker id = %q, want %q", summaries[0].ID, fixture.speakerID)
 	}
-	if len(s.Sessions) != 1 {
-		t.Fatalf("expected 1 embedded session, got %d", len(s.Sessions))
+}
+
+// The speaker's sessions belong to the detail endpoint, resolved to
+// {id, title, room, colours} objects the client renders as-is.
+func TestSpeakerRepo_GetSpeaker_EmbedsResolvedSessions(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSpeakerRepo(testDB, speakerTestKey, 5, time.UTC)
+
+	fixture := newSpeakerFixture(t, ctx, "Speaker With Session", "", "", "", true)
+	sessionID, _ := fixture.attachToSession(t, ctx)
+
+	speaker, err := repo.GetSpeaker(ctx, fixture.speakerID)
+	if err != nil {
+		t.Fatalf("GetSpeaker returned error: %v", err)
 	}
-	if s.Sessions[0].ID != sessionID {
-		t.Errorf("session id = %q, want %q", s.Sessions[0].ID, sessionID)
+
+	if len(speaker.Sessions) != 1 {
+		t.Fatalf("expected 1 embedded session, got %d", len(speaker.Sessions))
 	}
-	if s.Sessions[0].Title != "TDD Speaker Test Session" {
-		t.Errorf("session title = %q, want %q", s.Sessions[0].Title, "TDD Speaker Test Session")
+	sess := speaker.Sessions[0]
+	if sess.ID != sessionID {
+		t.Errorf("session id = %q, want %q", sess.ID, sessionID)
 	}
-	if s.Sessions[0].RoomName != testSpeakerRoomName {
-		t.Errorf("session roomName = %q, want %q", s.Sessions[0].RoomName, testSpeakerRoomName)
+	if sess.Title != "TDD Speaker Test Session" {
+		t.Errorf("session title = %q, want %q", sess.Title, "TDD Speaker Test Session")
 	}
-	if s.Sessions[0].TrackColor != testSpeakerTrackColor {
-		t.Errorf("session trackColor = %q, want %q", s.Sessions[0].TrackColor, testSpeakerTrackColor)
+	if sess.RoomName != testSpeakerRoomName {
+		t.Errorf("session roomName = %q, want %q", sess.RoomName, testSpeakerRoomName)
+	}
+	if sess.TrackColor != testSpeakerTrackColor {
+		t.Errorf("session trackColor = %q, want %q", sess.TrackColor, testSpeakerTrackColor)
+	}
+	if sess.RoomColor != testSpeakerRoomColor {
+		t.Errorf("session roomColor = %q, want %q", sess.RoomColor, testSpeakerRoomColor)
+	}
+}
+
+// The client used to get current-conference scoping for free, because it read
+// a speaker's sessions off an event-scoped list. The detail endpoint has to
+// enforce it itself, or a returning speaker's profile starts listing talks
+// from conferences that already happened.
+func TestSpeakerRepo_GetSpeaker_ExcludesSessionsFromOtherConferences(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSpeakerRepo(testDB, speakerTestKey, 5, time.UTC)
+
+	fixture := newSpeakerFixture(t, ctx, "Returning Speaker", "", "", "", true)
+	currentSessionID, _ := fixture.attachToSession(t, ctx)
+
+	var pastConfigID string
+	if err := testDB.QueryRow(ctx,
+		"INSERT INTO conference_config (name, start_date) VALUES ($1, $2) RETURNING id",
+		"TDD Past Conference", "2019-01-01",
+	).Scan(&pastConfigID); err != nil {
+		t.Fatalf("failed to insert past conference_config: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.Exec(context.Background(), "DELETE FROM conference_config WHERE id = $1", pastConfigID)
+	})
+
+	var pastSessionID string
+	if err := testDB.QueryRow(ctx,
+		`INSERT INTO sessions (config_id, kind, title) VALUES ($1, 'session', 'Talk From 2019') RETURNING id`,
+		pastConfigID,
+	).Scan(&pastSessionID); err != nil {
+		t.Fatalf("failed to insert past session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.Exec(context.Background(), "DELETE FROM sessions WHERE id = $1", pastSessionID)
+	})
+
+	if _, err := testDB.Exec(ctx,
+		"INSERT INTO session_speakers (session_id, speaker_id) VALUES ($1, $2)",
+		pastSessionID, fixture.speakerID,
+	); err != nil {
+		t.Fatalf("failed to link speaker to past session: %v", err)
+	}
+
+	speaker, err := repo.GetSpeaker(ctx, fixture.speakerID)
+	if err != nil {
+		t.Fatalf("GetSpeaker returned error: %v", err)
+	}
+	if len(speaker.Sessions) != 1 || speaker.Sessions[0].ID != currentSessionID {
+		t.Fatalf("sessions = %+v, want only the current conference's session %s", speaker.Sessions, currentSessionID)
 	}
 }
 
 // A session with no room and no track is a real state in this data (breaks,
 // and the Blue Room keynotes that carry no track_id): the fields must come
 // back empty and serialize away entirely, not as "".
-func TestSpeakerRepo_GetSpeakerSummary_OmitsRoomAndColourWhenSessionHasNeither(t *testing.T) {
+func TestSpeakerRepo_GetSpeaker_OmitsRoomAndColourWhenSessionHasNeither(t *testing.T) {
 	ctx := context.Background()
 	repo := NewSpeakerRepo(testDB, speakerTestKey, 5, time.UTC)
 
@@ -283,27 +359,30 @@ func TestSpeakerRepo_GetSpeakerSummary_OmitsRoomAndColourWhenSessionHasNeither(t
 		t.Fatalf("failed to clear room_id/track_id: %v", err)
 	}
 
-	summaries, err := repo.GetSpeakerSummary(ctx, models.SpeakerFilter{EventID: configID})
+	speaker, err := repo.GetSpeaker(ctx, fixture.speakerID)
 	if err != nil {
-		t.Fatalf("GetSpeakerSummary returned error: %v", err)
+		t.Fatalf("GetSpeaker returned error: %v", err)
 	}
-	if len(summaries) != 1 || len(summaries[0].Sessions) != 1 {
-		t.Fatalf("want exactly 1 speaker with 1 session, got %+v", summaries)
+	if len(speaker.Sessions) != 1 {
+		t.Fatalf("want exactly 1 session, got %+v", speaker.Sessions)
 	}
 
-	sess := summaries[0].Sessions[0]
+	sess := speaker.Sessions[0]
 	if sess.RoomName != "" {
 		t.Errorf("roomName = %q, want empty for a session with no room", sess.RoomName)
 	}
 	if sess.TrackColor != "" {
 		t.Errorf("trackColor = %q, want empty for a session with no track", sess.TrackColor)
 	}
+	if sess.RoomColor != "" {
+		t.Errorf("roomColor = %q, want empty for a session with no room", sess.RoomColor)
+	}
 
 	encoded, err := json.Marshal(sess)
 	if err != nil {
 		t.Fatalf("marshalling session: %v", err)
 	}
-	for _, key := range []string{"roomName", "trackColor"} {
+	for _, key := range []string{"roomName", "trackColor", "roomColor"} {
 		if bytes.Contains(encoded, []byte(key)) {
 			t.Errorf("%s should be omitted from JSON when empty, got %s", key, encoded)
 		}

@@ -132,7 +132,7 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 	var s models.Session
 	var category, dayID, trackID, roomID *string
 	var articleURL, articleLabel, videoURL, videoLabel *string
-	var trackColor, roomName, cfgTZ *string
+	var trackColor, roomName, roomColor, trackGroup, cfgTZ *string
 	var slotIndex *int
 	var date *time.Time
 	var startMinute *int
@@ -141,11 +141,13 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 		`SELECT s.id, s.kind, s.title, s.description, s.category,
 		        s.day_id, s.slot_index, s.duration_slots, s.track_id, s.room_id,
 		        s.article_url, s.article_label, s.video_url, s.video_label,
-		        d.date, d.start_minute, t.color, r.name, cc.timezone
+		        d.date, d.start_minute, t.color, r.name, rc.color, sec.label, cc.timezone
 		 FROM sessions s
 		 LEFT JOIN conference_days d ON s.day_id = d.id
 		 LEFT JOIN tracks t ON t.id = s.track_id
 		 LEFT JOIN rooms r ON r.id = s.room_id
+		 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
+		 LEFT JOIN track_sections sec ON sec.id = s.section_id
 		 LEFT JOIN conference_config cc ON cc.id = s.config_id
 		 WHERE s.id = $1`,
 		id,
@@ -153,7 +155,7 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 		&s.ID, &s.Kind, &s.Title, &s.Description, &category,
 		&dayID, &slotIndex, &s.DurationSlots, &trackID, &roomID,
 		&articleURL, &articleLabel, &videoURL, &videoLabel,
-		&date, &startMinute, &trackColor, &roomName, &cfgTZ,
+		&date, &startMinute, &trackColor, &roomName, &roomColor, &trackGroup, &cfgTZ,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -179,6 +181,12 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 	}
 	if roomName != nil {
 		s.RoomName = *roomName
+	}
+	if roomColor != nil {
+		s.RoomColor = *roomColor
+	}
+	if trackGroup != nil {
+		s.TrackGroup = *trackGroup
 	}
 	if articleURL != nil {
 		s.ArticleURL = *articleURL
@@ -227,11 +235,13 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 		`SELECT s.id, s.kind, s.title, s.description, s.category,
 		        s.day_id, s.slot_index, s.duration_slots, s.track_id, s.room_id,
 		        s.article_url, s.article_label, s.video_url, s.video_label,
-		        d.date, d.start_minute, t.color, r.name, cc.timezone
+		        d.date, d.start_minute, t.color, r.name, rc.color, sec.label, cc.timezone
 		 FROM sessions s
 		 LEFT JOIN conference_days d ON s.day_id = d.id
 		 LEFT JOIN tracks t ON t.id = s.track_id
 		 LEFT JOIN rooms r ON r.id = s.room_id
+		 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
+		 LEFT JOIN track_sections sec ON sec.id = s.section_id
 		 LEFT JOIN conference_config cc ON cc.id = s.config_id
 		 WHERE s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
 		 ORDER BY d.date NULLS LAST, s.slot_index NULLS LAST, s.id`,
@@ -246,7 +256,7 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 		var s models.Session
 		var category, dayID, trackID, roomID *string
 		var articleURL, articleLabel, videoURL, videoLabel *string
-		var trackColor, roomName, cfgTZ *string
+		var trackColor, roomName, roomColor, trackGroup, cfgTZ *string
 		var slotIndex *int
 		var date *time.Time
 		var startMinute *int
@@ -255,7 +265,7 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 			&s.ID, &s.Kind, &s.Title, &s.Description, &category,
 			&dayID, &slotIndex, &s.DurationSlots, &trackID, &roomID,
 			&articleURL, &articleLabel, &videoURL, &videoLabel,
-			&date, &startMinute, &trackColor, &roomName, &cfgTZ,
+			&date, &startMinute, &trackColor, &roomName, &roomColor, &trackGroup, &cfgTZ,
 		); err != nil {
 			return nil, err
 		}
@@ -277,6 +287,12 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 		}
 		if roomName != nil {
 			s.RoomName = *roomName
+		}
+		if roomColor != nil {
+			s.RoomColor = *roomColor
+		}
+		if trackGroup != nil {
+			s.TrackGroup = *trackGroup
 		}
 		if articleURL != nil {
 			s.ArticleURL = *articleURL

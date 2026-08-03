@@ -40,6 +40,8 @@ func TestSession_JSONShape(t *testing.T) {
 		SlotIndex:     &slotIndex,
 		DurationSlots: 6,
 		RoomID:        "room-1",
+		RoomColor:     "#08BAF6",
+		TrackGroup:    "Case Studies",
 		ArticleURL:    "https://example.com/article",
 		ArticleLabel:  "Slides",
 		VideoURL:      "https://example.com/video",
@@ -58,7 +60,7 @@ func TestSession_JSONShape(t *testing.T) {
 
 	for _, key := range []string{
 		"id", "kind", "title", "description", "category", "startTime", "endTime",
-		"dayId", "trackId", "slotIndex", "durationSlots", "roomId",
+		"dayId", "trackId", "trackGroup", "slotIndex", "durationSlots", "roomId", "roomColor",
 		"articleUrl", "articleLabel", "videoUrl", "videoLabel",
 	} {
 		if _, ok := got[key]; !ok {
@@ -86,8 +88,8 @@ func TestSession_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		"description", "category", "startTime", "endTime", "dayId", "trackId", "slotIndex",
-		"roomId", "articleUrl", "articleLabel", "videoUrl", "videoLabel",
+		"description", "category", "startTime", "endTime", "dayId", "trackId", "trackGroup", "slotIndex",
+		"roomId", "roomColor", "articleUrl", "articleLabel", "videoUrl", "videoLabel",
 	} {
 		if _, ok := got[key]; ok {
 			t.Errorf("expected %q to be omitted when empty/unscheduled, got %v", key, got)
@@ -134,7 +136,7 @@ func TestSession_StartTimeSerializesWithZoneOffset(t *testing.T) {
 func TestSession_EmbedsSpeakers(t *testing.T) {
 	s := Session{
 		ID: "s1", Kind: "session", Title: "T", DurationSlots: 6,
-		Speakers: []SessionSpeaker{{ID: "sp1", Name: "Ada Lovelace", PhotoURL: "https://x/a.webp", IsModerator: true}},
+		Speakers: []SessionSpeaker{{ID: "sp1", Name: "Ada Lovelace", Title: "Principal Engineer", Company: "WSO2", PhotoURL: "https://x/a.webp", IsModerator: true}},
 	}
 
 	b, err := json.Marshal(s)
@@ -151,7 +153,7 @@ func TestSession_EmbedsSpeakers(t *testing.T) {
 	if len(got.Speakers) != 1 {
 		t.Fatalf("speakers = %v, want a single element", got.Speakers)
 	}
-	for _, key := range []string{"id", "name", "photoUrl", "isModerator"} {
+	for _, key := range []string{"id", "name", "title", "company", "photoUrl", "isModerator"} {
 		if _, ok := got.Speakers[0][key]; !ok {
 			t.Errorf("embedded speaker missing key %q, got %v", key, got.Speakers[0])
 		}
@@ -172,5 +174,24 @@ func TestSession_EmptyCategoryIsOmittedNotEmptyString(t *testing.T) {
 	}
 	if strings.Contains(string(b), `"category"`) {
 		t.Errorf("category key present for an empty category; want it omitted: %s", b)
+	}
+}
+
+// A speaker with no job title or company must omit those keys rather than send
+// "" -- the
+// empty-string-as-absent sentinel the rest of this payload avoids (FE.md 3.6).
+func TestSessionSpeaker_TitleAndCompanyOmittedWhenEmpty(t *testing.T) {
+	b, err := json.Marshal(SessionSpeaker{ID: "sp1", Name: "Ada Lovelace"})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	for _, key := range []string{"title", "company"} {
+		if _, ok := got[key]; ok {
+			t.Errorf("expected %q to be omitted when empty, got %v", key, got)
+		}
 	}
 }

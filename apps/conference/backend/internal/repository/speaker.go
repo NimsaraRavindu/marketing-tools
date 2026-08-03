@@ -53,12 +53,17 @@ func NewSpeakerRepo(pool *pgxpool.Pool, piiKey []byte, slotMinutes int, loc *tim
 	return &SpeakerRepo{pool: pool, piiKey: piiKey, slotMinutes: slotMinutes, loc: loc}
 }
 
-// GetSpeaker returns a single visible speaker by id. Unlike the old Ballerina
-// getSpeaker(id), this filters on visible = true: visible is a new access
-// boundary the old schema never had, and this route is public/unauthenticated,
-// so a hidden speaker's id must not be a back door around the same
-// visibility check GetSpeakerSummary enforces. Returns ErrNotFound if no
-// matching visible row exists.
+// GetSpeaker returns a single visible speaker by id, with the sessions they
+// are on in the current conference embedded as resolved SpeakerSession
+// objects (title + real times + room name and colours). This is the whole
+// speaker detail screen in one response: nothing here needs a second request
+// or a client-side join.
+//
+// Unlike the old Ballerina getSpeaker(id), this filters on visible = true:
+// visible is a new access boundary the old schema never had, and this route is
+// public/unauthenticated, so a hidden speaker's id must not be a back door
+// around the same visibility check GetSpeakerSummary enforces. Returns
+// ErrNotFound if no matching visible row exists.
 func (r *SpeakerRepo) GetSpeaker(ctx context.Context, id string) (models.Speaker, error) {
 	var speaker models.Speaker
 	var name, title, bio string
@@ -88,35 +93,101 @@ func (r *SpeakerRepo) GetSpeaker(ctx context.Context, id string) (models.Speaker
 		speaker.PhotoURL = *photoURL
 	}
 
+	if speaker.Sessions, err = r.fetchSpeakerSessions(ctx, speaker.ID); err != nil {
+		return models.Speaker{}, err
+	}
+
 	return speaker, nil
 }
 
-// GetSpeakerSummary returns visible speakers, each with the sessions they're
-// attached to embedded as resolved SpeakerSession objects (title + real
-// times + room name and track colour) so the client needs no join back to
-// sessions, rooms or tracks (FE.md 3.2). A speaker with no sessions still
-// appears (with an empty, never nil, Sessions slice) unless an EventID filter
-// is set.
+// fetchSpeakerSessions returns the sessions the given speaker is on in the
+// current conference (the conference_config with the latest start_date -- the
+// same "current" rule GetEvents and GetCurrentSessions use), resolved to the
+// shape the speaker detail screen renders and ordered by start time.
 //
-// filter.EventID restricts to speakers with at least one session in that
-// conference_config (showing only those sessions). filter.Query is a
-// case-insensitive substring match on the decrypted name. Both name ordering
-// and the name search run in Go because name is encrypted at rest -- an SQL
-// ORDER BY / ILIKE over the ciphertext would be meaningless. Result is sorted
-// by name; each speaker's sessions are sorted by start time.
-func (r *SpeakerRepo) GetSpeakerSummary(ctx context.Context, filter models.SpeakerFilter) ([]models.SpeakerSummary, error) {
+// Scoping to the current conference preserves what the client used to get for
+// free: the speaker list it read these off is event-scoped, so an unscoped
+// query here would start surfacing a speaker's talks from past conferences on
+// their profile. Returns an empty, never nil, slice for a speaker with no
+// sessions.
+func (r *SpeakerRepo) fetchSpeakerSessions(ctx context.Context, speakerID string) ([]models.SpeakerSession, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT sp.id, sp.name, sp.title, sp.bio, sp.photo_url,
-		        s.id, s.title, s.slot_index, s.duration_slots, d.date, d.start_minute, cc.timezone,
-		        r.name, t.color
-		 FROM speakers sp
-		 LEFT JOIN session_speakers ss ON ss.speaker_id = sp.id
-		 LEFT JOIN sessions s ON s.id = ss.session_id
+		`SELECT s.id, s.title, s.slot_index, s.duration_slots,
+		        d.date, d.start_minute, cc.timezone, r.name, t.color, rc.color
+		 FROM session_speakers ss
+		 JOIN sessions s ON s.id = ss.session_id
 		 LEFT JOIN conference_days d ON d.id = s.day_id
 		 LEFT JOIN conference_config cc ON cc.id = s.config_id
 		 LEFT JOIN rooms r ON r.id = s.room_id
 		 LEFT JOIN tracks t ON t.id = s.track_id
-		 WHERE sp.visible AND ($1 = '' OR s.config_id = $1::uuid)`,
+		 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
+		 WHERE ss.speaker_id = $1
+		   AND s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)`,
+		speakerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	sessions := make([]models.SpeakerSession, 0)
+	for rows.Next() {
+		var sessionID, title string
+		var cfgTZ, roomName, trackColor, roomColor *string
+		var slotIndex, durationSlots, startMinute *int
+		var date *time.Time
+
+		if err := rows.Scan(&sessionID, &title, &slotIndex, &durationSlots,
+			&date, &startMinute, &cfgTZ, &roomName, &trackColor, &roomColor); err != nil {
+			return nil, err
+		}
+
+		sess := models.SpeakerSession{ID: sessionID, Title: title}
+		if roomName != nil {
+			sess.RoomName = *roomName
+		}
+		if trackColor != nil {
+			sess.TrackColor = *trackColor
+		}
+		if roomColor != nil {
+			sess.RoomColor = *roomColor
+		}
+		if slotIndex != nil && durationSlots != nil && date != nil && startMinute != nil {
+			start, end := computeSessionWindow(*date, *startMinute, *slotIndex, *durationSlots, r.slotMinutes, resolveLoc(cfgTZ, r.loc))
+			sess.StartTime = &start
+			sess.EndTime = &end
+		}
+		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessionStartsBefore(sessions[i], sessions[j])
+	})
+	return sessions, nil
+}
+
+// GetSpeakerSummary returns the visible speakers a directory listing renders,
+// sorted by name. It embeds no sessions: the list screen draws none, and a
+// client that wants a speaker's sessions reads GET /speakers/:id, which
+// resolves them there (see fetchSpeakerSessions).
+//
+// filter.EventID restricts to speakers with at least one session in that
+// conference_config. filter.Query is a case-insensitive substring match on the
+// decrypted name. Both name ordering and the name search run in Go because
+// name is encrypted at rest -- an SQL ORDER BY / ILIKE over the ciphertext
+// would be meaningless.
+func (r *SpeakerRepo) GetSpeakerSummary(ctx context.Context, filter models.SpeakerFilter) ([]models.SpeakerSummary, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT sp.id, sp.name, sp.title, sp.bio, sp.photo_url
+		 FROM speakers sp
+		 WHERE sp.visible
+		   AND ($1 = '' OR EXISTS (
+		         SELECT 1 FROM session_speakers ss
+		         JOIN sessions s ON s.id = ss.session_id
+		         WHERE ss.speaker_id = sp.id AND s.config_id = $1::uuid))`,
 		filter.EventID,
 	)
 	if err != nil {
@@ -124,85 +195,48 @@ func (r *SpeakerRepo) GetSpeakerSummary(ctx context.Context, filter models.Speak
 	}
 	defer rows.Close()
 
-	order := make([]string, 0)
-	bySpeaker := make(map[string]*models.SpeakerSummary)
+	q := strings.ToLower(strings.TrimSpace(filter.Query))
+	summaries := make([]models.SpeakerSummary, 0)
 
 	for rows.Next() {
 		var id, name, title, bio string
-		var photoURL, sessionID, sessionTitle, cfgTZ, roomName, trackColor *string
-		var slotIndex, durationSlots, startMinute *int
-		var date *time.Time
+		var photoURL *string
 
-		if err := rows.Scan(&id, &name, &title, &bio, &photoURL,
-			&sessionID, &sessionTitle, &slotIndex, &durationSlots, &date, &startMinute, &cfgTZ,
-			&roomName, &trackColor); err != nil {
+		if err := rows.Scan(&id, &name, &title, &bio, &photoURL); err != nil {
 			return nil, err
 		}
 
-		summary, ok := bySpeaker[id]
-		if !ok {
-			decryptedName, err := r.decrypt(name)
-			if err != nil {
-				return nil, fmt.Errorf("decrypting name: %w", err)
-			}
-			decryptedTitle, err := r.decrypt(title)
-			if err != nil {
-				return nil, fmt.Errorf("decrypting title: %w", err)
-			}
-			decryptedBio, err := r.decrypt(bio)
-			if err != nil {
-				return nil, fmt.Errorf("decrypting bio: %w", err)
-			}
-
-			summary = &models.SpeakerSummary{
-				ID:          id,
-				Name:        decryptedName,
-				Description: decryptedTitle,
-				Bio:         decryptedBio,
-				Sessions:    make([]models.SpeakerSession, 0),
-			}
-			if photoURL != nil {
-				summary.PhotoURL = *photoURL
-			}
-			bySpeaker[id] = summary
-			order = append(order, id)
+		decryptedName, err := r.decrypt(name)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting name: %w", err)
+		}
+		if q != "" && !strings.Contains(strings.ToLower(decryptedName), q) {
+			continue
+		}
+		decryptedTitle, err := r.decrypt(title)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting title: %w", err)
+		}
+		decryptedBio, err := r.decrypt(bio)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting bio: %w", err)
 		}
 
-		if sessionID != nil {
-			sess := models.SpeakerSession{ID: *sessionID}
-			if sessionTitle != nil {
-				sess.Title = *sessionTitle
-			}
-			if roomName != nil {
-				sess.RoomName = *roomName
-			}
-			if trackColor != nil {
-				sess.TrackColor = *trackColor
-			}
-			if slotIndex != nil && durationSlots != nil && date != nil && startMinute != nil {
-				start, end := computeSessionWindow(*date, *startMinute, *slotIndex, *durationSlots, r.slotMinutes, resolveLoc(cfgTZ, r.loc))
-				sess.StartTime = &start
-				sess.EndTime = &end
-			}
-			summary.Sessions = append(summary.Sessions, sess)
+		summary := models.SpeakerSummary{
+			ID:          id,
+			Name:        decryptedName,
+			Description: decryptedTitle,
+			Bio:         decryptedBio,
 		}
+		if photoURL != nil {
+			summary.PhotoURL = *photoURL
+		}
+		summaries = append(summaries, summary)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	q := strings.ToLower(strings.TrimSpace(filter.Query))
-	summaries := make([]models.SpeakerSummary, 0, len(order))
-	for _, id := range order {
-		s := bySpeaker[id]
-		if q != "" && !strings.Contains(strings.ToLower(s.Name), q) {
-			continue
-		}
-		sort.SliceStable(s.Sessions, func(i, j int) bool {
-			return sessionStartsBefore(s.Sessions[i], s.Sessions[j])
-		})
-		summaries = append(summaries, *s)
-	}
 	sort.SliceStable(summaries, func(i, j int) bool {
 		return strings.ToLower(summaries[i].Name) < strings.ToLower(summaries[j].Name)
 	})
