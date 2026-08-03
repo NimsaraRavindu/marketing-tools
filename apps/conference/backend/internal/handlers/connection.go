@@ -108,9 +108,17 @@ func (h *ConnectionHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Include the same enriched fields GET returns: the full attendee was
+	// already fetched above, so omitting profileUrl/title/company/country here
+	// made POST and GET report different shapes for the same connection.
 	c.JSON(http.StatusCreated, models.ConnectionUserInfo{
-		UserID: req.UserID,
-		Name:   strings.TrimSpace(target.FirstName + " " + target.LastName),
-		Email:  target.Email,
+		UserID:     req.UserID,
+		Name:       strings.TrimSpace(target.FirstName + " " + target.LastName),
+		Email:      target.Email,
+		Status:     req.Status.String(),
+		ProfileURL: target.ProfileURL,
+		Title:      target.Title,
+		Company:    target.Company,
+		Country:    target.Country,
 	})
 }

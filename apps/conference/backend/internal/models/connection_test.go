@@ -70,6 +70,36 @@ func TestConnectionUserInfo_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestConnectionStatus_String(t *testing.T) {
+	cases := map[ConnectionStatus]string{
+		ConnectionRejected:   "rejected",
+		ConnectionPending:    "pending",
+		ConnectionAccepted:   "accepted",
+		ConnectionStatus(99): "unknown",
+	}
+	for status, want := range cases {
+		if got := status.String(); got != want {
+			t.Errorf("ConnectionStatus(%d).String() = %q, want %q", status, got, want)
+		}
+	}
+}
+
+func TestConnectionUserInfo_StatusAlwaysPresent(t *testing.T) {
+	// status carries the state explicitly, so it must serialize even when empty
+	// (no omitempty) -- the whole point of adding the field.
+	b, err := json.Marshal(ConnectionUserInfo{UserID: "u1", Name: "Alice", Email: "a@example.com"})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if _, ok := got["status"]; !ok {
+		t.Errorf("expected status key to always be present, got %v", got)
+	}
+}
+
 func TestUserConnectionRequest_UnmarshalDefaultsToPending(t *testing.T) {
 	var req UserConnectionRequest
 	if err := json.Unmarshal([]byte(`{"userId":"u1"}`), &req); err != nil {
