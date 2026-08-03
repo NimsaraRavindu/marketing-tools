@@ -158,13 +158,16 @@ func main() {
 		TokenValidatorEnabled: cfg.TokenValidatorEnabled,
 	}))
 	{
-		api.GET("/speakers", speakerHandler.List)
-		api.GET("/speakers/:id", speakerHandler.Get)
-		api.GET("/sessions/current", sessionHandler.Current)
-		api.GET("/sessions/:id", sessionHandler.Get)
-		api.GET("/events", eventHandler.List)
-		api.GET("/events/:eventId/agendas", eventHandler.Agendas)
-		api.GET("/event-agendas", eventHandler.LegacyAgendas)
+		// Conference data is read-only and changes rarely, so these GETs carry
+		// ETag + Cache-Control validators.
+		cacheable := middleware.ETag("private, max-age=60, must-revalidate")
+		api.GET("/speakers", cacheable, speakerHandler.List)
+		api.GET("/speakers/:id", cacheable, speakerHandler.Get)
+		api.GET("/sessions/current", cacheable, sessionHandler.Current)
+		api.GET("/sessions/:id", cacheable, sessionHandler.Get)
+		api.GET("/events", cacheable, eventHandler.List)
+		api.GET("/events/:eventId/agendas", cacheable, eventHandler.Agendas)
+		api.GET("/event-agendas", cacheable, eventHandler.LegacyAgendas)
 
 		api.POST("/qr/scan", coinHandler.Scan)
 		api.GET("/qr/history", coinHandler.History)

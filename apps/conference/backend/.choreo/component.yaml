@@ -1,0 +1,30 @@
+# Choreo component descriptor for the conference backend.
+#
+# The component root is `apps/conference/backend`, so every path below is
+# resolved relative to that directory (not the repository root).
+#
+# +required Schema version
+schemaVersion: 1.2
+
+endpoints:
+  # +required Unique name for the endpoint (lowercase alphanumeric + dashes).
+  - name: conference-backend-v2
+    # +optional Display name shown in the Choreo console.
+    displayName: Conference Backend V2
+    # +required Service section
+    service:
+      # +required Base path the service is exposed on. The Go router mounts
+      # every route at the root (/health, /sessions, /events, ...).
+      basePath: /
+      # +required Port the container listens on. Matches the PORT default in
+      # internal/config/config.go and .env.example.
+      port: 8080
+    # +required Endpoint type
+    type: REST
+    # +required Network level visibility of the endpoint.
+    networkVisibilities:
+      - Public
+    # +optional Path to the OpenAPI definition, relative to the component root.
+    # This is the spec added in this PR and is the contract the frontend
+    # generates its types from.
+    schemaFilePath: openapi.yaml

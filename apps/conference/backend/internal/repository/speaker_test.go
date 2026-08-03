@@ -19,8 +19,10 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -77,9 +79,18 @@ func newSpeakerFixture(t *testing.T, ctx context.Context, name, title, bio, phot
 	return &speakerFixture{speakerID: speakerID}
 }
 
-// attachToSession creates a minimal conference_config + session and links
-// this fixture's speaker to it via session_speakers, returning
-// (sessionID, configID) for assertions.
+// Room name and track colour the fixture session is placed in, asserted by
+// TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions.
+const (
+	testSpeakerRoomName   = "TDD Speaker Test Room"
+	testSpeakerTrackColor = "#123456"
+)
+
+// attachToSession creates a minimal conference_config + room + track +
+// session and links this fixture's speaker to it via session_speakers,
+// returning (sessionID, configID) for assertions. The session is left
+// unscheduled (no day_id/slot_index) -- the track needs a day, but the
+// session doesn't sit on one.
 func (f *speakerFixture) attachToSession(t *testing.T, ctx context.Context) (sessionID, configID string) {
 	t.Helper()
 
@@ -94,9 +105,37 @@ func (f *speakerFixture) attachToSession(t *testing.T, ctx context.Context) (ses
 		_, _ = testDB.Exec(context.Background(), "DELETE FROM conference_config WHERE id = $1", configID)
 	})
 
+	var roomID string
 	err = testDB.QueryRow(ctx,
-		"INSERT INTO sessions (config_id, kind, title) VALUES ($1, 'session', 'TDD Speaker Test Session') RETURNING id",
-		configID,
+		"INSERT INTO rooms (config_id, name) VALUES ($1, $2) RETURNING id",
+		configID, testSpeakerRoomName,
+	).Scan(&roomID)
+	if err != nil {
+		t.Fatalf("failed to insert test room: %v", err)
+	}
+
+	var dayID string
+	err = testDB.QueryRow(ctx,
+		"INSERT INTO conference_days (config_id, day_index, date) VALUES ($1, 0, $2) RETURNING id",
+		configID, "2026-08-01",
+	).Scan(&dayID)
+	if err != nil {
+		t.Fatalf("failed to insert test conference_day: %v", err)
+	}
+
+	var trackID string
+	err = testDB.QueryRow(ctx,
+		"INSERT INTO tracks (day_id, room_id, color) VALUES ($1, $2, $3) RETURNING id",
+		dayID, roomID, testSpeakerTrackColor,
+	).Scan(&trackID)
+	if err != nil {
+		t.Fatalf("failed to insert test track: %v", err)
+	}
+
+	err = testDB.QueryRow(ctx,
+		`INSERT INTO sessions (config_id, kind, title, room_id, track_id)
+		 VALUES ($1, 'session', 'TDD Speaker Test Session', $2, $3) RETURNING id`,
+		configID, roomID, trackID,
 	).Scan(&sessionID)
 	if err != nil {
 		t.Fatalf("failed to insert test session: %v", err)
@@ -219,6 +258,55 @@ func TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions(t *te
 	}
 	if s.Sessions[0].Title != "TDD Speaker Test Session" {
 		t.Errorf("session title = %q, want %q", s.Sessions[0].Title, "TDD Speaker Test Session")
+	}
+	if s.Sessions[0].RoomName != testSpeakerRoomName {
+		t.Errorf("session roomName = %q, want %q", s.Sessions[0].RoomName, testSpeakerRoomName)
+	}
+	if s.Sessions[0].TrackColor != testSpeakerTrackColor {
+		t.Errorf("session trackColor = %q, want %q", s.Sessions[0].TrackColor, testSpeakerTrackColor)
+	}
+}
+
+// A session with no room and no track is a real state in this data (breaks,
+// and the Blue Room keynotes that carry no track_id): the fields must come
+// back empty and serialize away entirely, not as "".
+func TestSpeakerRepo_GetSpeakerSummary_OmitsRoomAndColourWhenSessionHasNeither(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSpeakerRepo(testDB, speakerTestKey, 5, time.UTC)
+
+	fixture := newSpeakerFixture(t, ctx, "Speaker Without Room", "", "", "", true)
+	_, configID := fixture.attachToSession(t, ctx)
+
+	if _, err := testDB.Exec(ctx,
+		"UPDATE sessions SET room_id = NULL, track_id = NULL WHERE config_id = $1", configID,
+	); err != nil {
+		t.Fatalf("failed to clear room_id/track_id: %v", err)
+	}
+
+	summaries, err := repo.GetSpeakerSummary(ctx, models.SpeakerFilter{EventID: configID})
+	if err != nil {
+		t.Fatalf("GetSpeakerSummary returned error: %v", err)
+	}
+	if len(summaries) != 1 || len(summaries[0].Sessions) != 1 {
+		t.Fatalf("want exactly 1 speaker with 1 session, got %+v", summaries)
+	}
+
+	sess := summaries[0].Sessions[0]
+	if sess.RoomName != "" {
+		t.Errorf("roomName = %q, want empty for a session with no room", sess.RoomName)
+	}
+	if sess.TrackColor != "" {
+		t.Errorf("trackColor = %q, want empty for a session with no track", sess.TrackColor)
+	}
+
+	encoded, err := json.Marshal(sess)
+	if err != nil {
+		t.Fatalf("marshalling session: %v", err)
+	}
+	for _, key := range []string{"roomName", "trackColor"} {
+		if bytes.Contains(encoded, []byte(key)) {
+			t.Errorf("%s should be omitted from JSON when empty, got %s", key, encoded)
+		}
 	}
 }
 

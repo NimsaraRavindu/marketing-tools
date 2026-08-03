@@ -93,9 +93,10 @@ func (r *SpeakerRepo) GetSpeaker(ctx context.Context, id string) (models.Speaker
 
 // GetSpeakerSummary returns visible speakers, each with the sessions they're
 // attached to embedded as resolved SpeakerSession objects (title + real
-// times) so the client needs no join back to sessions (FE.md 3.2). A speaker
-// with no sessions still appears (with an empty, never nil, Sessions slice)
-// unless an EventID filter is set.
+// times + room name and track colour) so the client needs no join back to
+// sessions, rooms or tracks (FE.md 3.2). A speaker with no sessions still
+// appears (with an empty, never nil, Sessions slice) unless an EventID filter
+// is set.
 //
 // filter.EventID restricts to speakers with at least one session in that
 // conference_config (showing only those sessions). filter.Query is a
@@ -106,12 +107,15 @@ func (r *SpeakerRepo) GetSpeaker(ctx context.Context, id string) (models.Speaker
 func (r *SpeakerRepo) GetSpeakerSummary(ctx context.Context, filter models.SpeakerFilter) ([]models.SpeakerSummary, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT sp.id, sp.name, sp.title, sp.bio, sp.photo_url,
-		        s.id, s.title, s.slot_index, s.duration_slots, d.date, d.start_minute, cc.timezone
+		        s.id, s.title, s.slot_index, s.duration_slots, d.date, d.start_minute, cc.timezone,
+		        r.name, t.color
 		 FROM speakers sp
 		 LEFT JOIN session_speakers ss ON ss.speaker_id = sp.id
 		 LEFT JOIN sessions s ON s.id = ss.session_id
 		 LEFT JOIN conference_days d ON d.id = s.day_id
 		 LEFT JOIN conference_config cc ON cc.id = s.config_id
+		 LEFT JOIN rooms r ON r.id = s.room_id
+		 LEFT JOIN tracks t ON t.id = s.track_id
 		 WHERE sp.visible AND ($1 = '' OR s.config_id = $1::uuid)`,
 		filter.EventID,
 	)
@@ -125,12 +129,13 @@ func (r *SpeakerRepo) GetSpeakerSummary(ctx context.Context, filter models.Speak
 
 	for rows.Next() {
 		var id, name, title, bio string
-		var photoURL, sessionID, sessionTitle, cfgTZ *string
+		var photoURL, sessionID, sessionTitle, cfgTZ, roomName, trackColor *string
 		var slotIndex, durationSlots, startMinute *int
 		var date *time.Time
 
 		if err := rows.Scan(&id, &name, &title, &bio, &photoURL,
-			&sessionID, &sessionTitle, &slotIndex, &durationSlots, &date, &startMinute, &cfgTZ); err != nil {
+			&sessionID, &sessionTitle, &slotIndex, &durationSlots, &date, &startMinute, &cfgTZ,
+			&roomName, &trackColor); err != nil {
 			return nil, err
 		}
 
@@ -167,6 +172,12 @@ func (r *SpeakerRepo) GetSpeakerSummary(ctx context.Context, filter models.Speak
 			sess := models.SpeakerSession{ID: *sessionID}
 			if sessionTitle != nil {
 				sess.Title = *sessionTitle
+			}
+			if roomName != nil {
+				sess.RoomName = *roomName
+			}
+			if trackColor != nil {
+				sess.TrackColor = *trackColor
 			}
 			if slotIndex != nil && durationSlots != nil && date != nil && startMinute != nil {
 				start, end := computeSessionWindow(*date, *startMinute, *slotIndex, *durationSlots, r.slotMinutes, resolveLoc(cfgTZ, r.loc))
