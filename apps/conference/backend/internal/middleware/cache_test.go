@@ -78,6 +78,57 @@ func TestETag_MatchingIfNoneMatchReturns304WithNoBody(t *testing.T) {
 	}
 }
 
+// RFC 9110 13.1.2 allows "*" and a comma-separated list, and mandates weak
+// comparison, so all of these must still 304. A caching proxy that weakens the
+// tag or replays more than one is the realistic source of these forms.
+func TestETag_IfNoneMatchAcceptsListsWildcardAndWeakTags(t *testing.T) {
+	rec := httptest.NewRecorder()
+	etagRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("no ETag from first request")
+	}
+
+	tests := []struct {
+		name       string
+		ifNoneMic  string
+		wantStatus int
+	}{
+		{"exact", etag, http.StatusNotModified},
+		{"wildcard", "*", http.StatusNotModified},
+		{"weak form of ours", "W/" + etag, http.StatusNotModified},
+		{"list, ours last", `"other", ` + etag, http.StatusNotModified},
+		{"list, ours first", etag + `, "other"`, http.StatusNotModified},
+		{"list with weak entries", `W/"other", W/` + etag, http.StatusNotModified},
+		{"surrounding whitespace", "  " + etag + "  ", http.StatusNotModified},
+		{"no match", `"nope"`, http.StatusOK},
+		{"list with no match", `"a", "b"`, http.StatusOK},
+		{"empty header", "", http.StatusOK},
+		{"prefix of ours is not a match", etag[:len(etag)-2] + `"`, http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			if tt.ifNoneMic != "" {
+				req.Header.Set("If-None-Match", tt.ifNoneMic)
+			}
+			etagRouter().ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantStatus == http.StatusNotModified && rec.Body.Len() != 0 {
+				t.Errorf("304 body = %q, want empty", rec.Body.String())
+			}
+			if tt.wantStatus == http.StatusOK && rec.Body.String() != `{"hello":"world"}` {
+				t.Errorf("body = %q, want the full JSON", rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestETag_DifferentBodyProducesDifferentETag(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

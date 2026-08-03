@@ -9,13 +9,22 @@
 #   - Collections are always arrays (never null); optional scalars are omitted
 #     when empty (never "").
 #   - Timestamps are anchored to the event's `timezone` (also in the payload).
+#
+# Scope: the conference-data, attendee-search, connection and recommendation
+# routes the series reshaped. The QR/coin, feedback, profile and AI-assistant
+# routes registered in cmd/server/main.go are real but not described here yet —
+# they were not part of the reshape, and documenting a response shape nobody
+# has pinned down would be worse than the gap. An endpoint absent from this
+# file is undocumented, not unimplemented.
 openapi: 3.0.3
 info:
   title: WSO2Con Conference Backend
   version: "1.0.0"
   description: >
-    Conference data, attendee/networking, favorites, feedback and AI-feature
-    endpoints. All routes except /health require the `x-jwt-assertion` header.
+    Conference data, attendee search, networking and recommendation endpoints.
+    All routes except /health require the `x-jwt-assertion` header.
+    Does not yet cover the QR/coin, feedback, profile and AI-assistant routes;
+    see the scope note at the top of this file.
 servers:
   - url: /
 security:
@@ -26,7 +35,6 @@ tags:
   - name: speakers
   - name: attendees
   - name: connections
-  - name: favorites
   - name: recommendations
 
 paths:
@@ -187,41 +195,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AttendeeSearchResult" }
         "400": { description: Invalid cursor or negative limit }
-
-  /users/me/favorites:
-    get:
-      tags: [favorites]
-      summary: The caller's favorite session references (resolve against live session data)
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items: { $ref: "#/components/schemas/Favorite" }
-
-  /users/me/favorites/{sessionId}:
-    put:
-      tags: [favorites]
-      summary: Add a favorite (idempotent)
-      parameters:
-        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        "204": { description: Added (or already present) }
-        "400": { description: Malformed sessionId }
-    delete:
-      tags: [favorites]
-      summary: Remove a favorite (idempotent)
-      parameters:
-        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        "204": { description: Removed (or was not present) }
-        "400": { description: Malformed sessionId }
 
   /users/me/connections:
     get:
@@ -409,12 +382,6 @@ components:
         isPartner: { type: boolean }
         profileUrl: { type: string }
         qrUri: { type: string }
-    Favorite:
-      type: object
-      required: [sessionId, createdAt]
-      properties:
-        sessionId: { type: string, format: uuid }
-        createdAt: { type: string, format: date-time }
     UserConnectionsInfo:
       type: object
       properties:

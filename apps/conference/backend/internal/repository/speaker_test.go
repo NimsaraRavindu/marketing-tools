@@ -19,8 +19,10 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -262,6 +264,49 @@ func TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions(t *te
 	}
 	if s.Sessions[0].TrackColor != testSpeakerTrackColor {
 		t.Errorf("session trackColor = %q, want %q", s.Sessions[0].TrackColor, testSpeakerTrackColor)
+	}
+}
+
+// A session with no room and no track is a real state in this data (breaks,
+// and the Blue Room keynotes that carry no track_id): the fields must come
+// back empty and serialize away entirely, not as "".
+func TestSpeakerRepo_GetSpeakerSummary_OmitsRoomAndColourWhenSessionHasNeither(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSpeakerRepo(testDB, speakerTestKey, 5, time.UTC)
+
+	fixture := newSpeakerFixture(t, ctx, "Speaker Without Room", "", "", "", true)
+	_, configID := fixture.attachToSession(t, ctx)
+
+	if _, err := testDB.Exec(ctx,
+		"UPDATE sessions SET room_id = NULL, track_id = NULL WHERE config_id = $1", configID,
+	); err != nil {
+		t.Fatalf("failed to clear room_id/track_id: %v", err)
+	}
+
+	summaries, err := repo.GetSpeakerSummary(ctx, models.SpeakerFilter{EventID: configID})
+	if err != nil {
+		t.Fatalf("GetSpeakerSummary returned error: %v", err)
+	}
+	if len(summaries) != 1 || len(summaries[0].Sessions) != 1 {
+		t.Fatalf("want exactly 1 speaker with 1 session, got %+v", summaries)
+	}
+
+	sess := summaries[0].Sessions[0]
+	if sess.RoomName != "" {
+		t.Errorf("roomName = %q, want empty for a session with no room", sess.RoomName)
+	}
+	if sess.TrackColor != "" {
+		t.Errorf("trackColor = %q, want empty for a session with no track", sess.TrackColor)
+	}
+
+	encoded, err := json.Marshal(sess)
+	if err != nil {
+		t.Fatalf("marshalling session: %v", err)
+	}
+	for _, key := range []string{"roomName", "trackColor"} {
+		if bytes.Contains(encoded, []byte(key)) {
+			t.Errorf("%s should be omitted from JSON when empty, got %s", key, encoded)
+		}
 	}
 }
 

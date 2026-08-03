@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -58,7 +59,7 @@ func ETag(cacheControl string) gin.HandlerFunc {
 			c.Writer.Header().Set("Cache-Control", cacheControl)
 		}
 
-		if match := c.Request.Header.Get("If-None-Match"); match == etag {
+		if etagMatches(c.Request.Header.Get("If-None-Match"), etag) {
 			c.Writer.Header().Del("Content-Length")
 			c.Writer.WriteHeader(http.StatusNotModified)
 			return
@@ -66,6 +67,33 @@ func ETag(cacheControl string) gin.HandlerFunc {
 
 		buf.flush()
 	}
+}
+
+// etagMatches reports whether an If-None-Match header value selects the given
+// ETag. RFC 9110 13.1.2 allows "*", allows a comma-separated list of entity
+// tags, and mandates the weak comparison function -- so a W/ prefix on either
+// side is ignored. A plain string equality check silently 200s for a caching
+// proxy that weakens the tag or sends more than one.
+//
+// Splitting on commas can mis-parse an entity tag that itself contains one
+// (the grammar permits it). Ours are hex digests, so they never do, and the
+// worst a mis-parse can produce is a missed 304 -- a correct full response,
+// never a wrongly-empty one.
+func etagMatches(header, etag string) bool {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return false
+	}
+	if header == "*" {
+		return true
+	}
+	etag = strings.TrimPrefix(etag, "W/")
+	for _, candidate := range strings.Split(header, ",") {
+		if strings.TrimPrefix(strings.TrimSpace(candidate), "W/") == etag {
+			return true
+		}
+	}
+	return false
 }
 
 // bufferingWriter captures the handler's response so the ETag middleware can
