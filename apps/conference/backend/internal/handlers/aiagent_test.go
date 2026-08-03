@@ -105,7 +105,7 @@ func TestAIAgentHandler_MaintenanceStatus_EchoesConfiguredFlags(t *testing.T) {
 		EnabledMatchMaker:         true,
 		EnabledO2Bar:              false,
 	}
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, status)
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, status, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodGet, "/ai-maintenance-status", nil)
@@ -126,7 +126,7 @@ func TestAIAgentHandler_MaintenanceStatus_EchoesConfiguredFlags(t *testing.T) {
 func TestAIAgentHandler_MaintenanceStatus_NoAuthRequired(t *testing.T) {
 	// This route has no context param at all in the old code -- unlike
 	// every other AI route, it works with no authenticated user in context.
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ai-maintenance-status", nil)

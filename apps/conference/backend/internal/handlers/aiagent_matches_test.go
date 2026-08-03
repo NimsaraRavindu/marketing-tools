@@ -27,7 +27,7 @@ import (
 )
 
 func TestAIAgentHandler_Matches_Unauthenticated(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodGet, "/users/me/matches", nil)
@@ -37,7 +37,7 @@ func TestAIAgentHandler_Matches_Unauthenticated(t *testing.T) {
 }
 
 func TestAIAgentHandler_Matches_ClientError_Returns500(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{matchesErr: errBoom}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{matchesErr: errBoom}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/users/me/matches", nil)
@@ -55,7 +55,7 @@ func TestAIAgentHandler_Matches_HappyPath_OneEnrichedOneNotFound(t *testing.T) {
 		"known@wso2.com": {IDPUUID: "uuid-known", ProfileURL: "https://example.com/known.png"},
 	}}
 	user := &middleware.UserInfo{Email: testUser.Email, UserID: testUser.UserID, RawToken: "raw-jwt-value"}
-	h := NewAIAgentHandler(client, attendees, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(client, attendees, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, user)
 
 	w := doRequest(r, http.MethodGet, "/users/me/matches", nil)
@@ -87,7 +87,7 @@ func TestAIAgentHandler_Matches_RealDBErrorAbortsWholeRequest(t *testing.T) {
 		{Email: "b@wso2.com", Name: "B"},
 	}}
 	attendees := &fakeAttendeeRepo{getErr: errBoom}
-	h := NewAIAgentHandler(client, attendees, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(client, attendees, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/users/me/matches", nil)

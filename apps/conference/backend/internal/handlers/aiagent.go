@@ -38,18 +38,29 @@ type AIAgentClient interface {
 	RetrieveChatResponse(ctx context.Context, jwtAssertion string, req models.ChatRequest) (*models.ChatResponse, error)
 }
 
+// SessionDayReader resolves session ids to their conference_days id, used to
+// day-associate picked-for-you recommendations (Phase E). Satisfied by
+// *repository.SessionRepo. Optional: when nil, recommendations pass through
+// without day enrichment.
+type SessionDayReader interface {
+	DayIDsForSessions(ctx context.Context, sessionIDs []string) (map[string]string, error)
+}
+
 // AIAgentHandler exposes the AI feature HTTP endpoints.
 type AIAgentHandler struct {
 	client        AIAgentClient
 	attendees     AttendeeProfileReader
 	featureStatus config.AIFeatureStatus
+	sessionDays   SessionDayReader
 }
 
 // NewAIAgentHandler constructs an AIAgentHandler. attendees resolves
 // uuid/profileUrl enrichment for the matches/O2Bar routes (see
 // .claude/PLAN.md); featureStatus is echoed as-is by MaintenanceStatus.
-func NewAIAgentHandler(client AIAgentClient, attendees AttendeeProfileReader, featureStatus config.AIFeatureStatus) *AIAgentHandler {
-	return &AIAgentHandler{client: client, attendees: attendees, featureStatus: featureStatus}
+// sessionDays day-associates agenda recommendations (Phase E); pass nil to
+// disable that enrichment (e.g. in tests that don't exercise it).
+func NewAIAgentHandler(client AIAgentClient, attendees AttendeeProfileReader, featureStatus config.AIFeatureStatus, sessionDays SessionDayReader) *AIAgentHandler {
+	return &AIAgentHandler{client: client, attendees: attendees, featureStatus: featureStatus, sessionDays: sessionDays}
 }
 
 // MaintenanceStatus handles GET /ai-maintenance-status. Unlike every other

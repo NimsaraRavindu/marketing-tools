@@ -28,7 +28,7 @@ import (
 )
 
 func TestAIAgentHandler_O2BarRecommendationsGet_Unauthenticated(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodGet, "/o2bar/recommendations", nil)
@@ -38,7 +38,7 @@ func TestAIAgentHandler_O2BarRecommendationsGet_Unauthenticated(t *testing.T) {
 }
 
 func TestAIAgentHandler_O2BarRecommendationsGet_ClientError_Returns500(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{o2barErr: errBoom}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{o2barErr: errBoom}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/o2bar/recommendations", nil)
@@ -49,7 +49,7 @@ func TestAIAgentHandler_O2BarRecommendationsGet_ClientError_Returns500(t *testin
 
 func TestAIAgentHandler_O2BarRecommendationsGet_NoQuestionSent(t *testing.T) {
 	client := &fakeAIAgentClient{o2bar: []models.O2BarRecommendationResponse{}}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/o2bar/recommendations", nil)
@@ -82,7 +82,7 @@ func TestAIAgentHandler_O2BarRecommendationsGet_ProfileURLPrefersAIResponse(t *t
 		"known@wso2.com":    {IDPUUID: "uuid-known", ProfileURL: "https://db.example.com/known.png"},
 		"fallback@wso2.com": {IDPUUID: "uuid-fallback", ProfileURL: "https://db.example.com/fallback.png"},
 	}}
-	h := NewAIAgentHandler(client, attendees, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(client, attendees, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/o2bar/recommendations", nil)
@@ -114,7 +114,7 @@ func TestAIAgentHandler_O2BarRecommendationsGet_ProfileURLPrefersAIResponse(t *t
 func TestAIAgentHandler_O2BarRecommendationsGet_RealDBErrorAbortsWholeRequest(t *testing.T) {
 	client := &fakeAIAgentClient{o2bar: []models.O2BarRecommendationResponse{{Email: "a@wso2.com"}}}
 	attendees := &fakeAttendeeRepo{getErr: errBoom}
-	h := NewAIAgentHandler(client, attendees, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(client, attendees, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/o2bar/recommendations", nil)
@@ -124,7 +124,7 @@ func TestAIAgentHandler_O2BarRecommendationsGet_RealDBErrorAbortsWholeRequest(t 
 }
 
 func TestAIAgentHandler_O2BarRecommendationsPost_Unauthenticated(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodPost, "/o2bar/recommendations", models.O2BarRecommendationInput{})
@@ -135,7 +135,7 @@ func TestAIAgentHandler_O2BarRecommendationsPost_Unauthenticated(t *testing.T) {
 
 func TestAIAgentHandler_O2BarRecommendationsPost_ForwardsQuestionAndReturns201(t *testing.T) {
 	client := &fakeAIAgentClient{o2bar: []models.O2BarRecommendationResponse{}}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	question := "when is the next slot?"
@@ -149,7 +149,7 @@ func TestAIAgentHandler_O2BarRecommendationsPost_ForwardsQuestionAndReturns201(t
 }
 
 func TestAIAgentHandler_O2BarRecommendationsPost_MalformedBody_Returns400(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{})
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	req := httptest.NewRequest(http.MethodPost, "/o2bar/recommendations", bytes.NewBufferString("{not json"))
