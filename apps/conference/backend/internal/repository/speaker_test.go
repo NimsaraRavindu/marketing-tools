@@ -77,9 +77,18 @@ func newSpeakerFixture(t *testing.T, ctx context.Context, name, title, bio, phot
 	return &speakerFixture{speakerID: speakerID}
 }
 
-// attachToSession creates a minimal conference_config + session and links
-// this fixture's speaker to it via session_speakers, returning
-// (sessionID, configID) for assertions.
+// Room name and track colour the fixture session is placed in, asserted by
+// TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions.
+const (
+	testSpeakerRoomName   = "TDD Speaker Test Room"
+	testSpeakerTrackColor = "#123456"
+)
+
+// attachToSession creates a minimal conference_config + room + track +
+// session and links this fixture's speaker to it via session_speakers,
+// returning (sessionID, configID) for assertions. The session is left
+// unscheduled (no day_id/slot_index) -- the track needs a day, but the
+// session doesn't sit on one.
 func (f *speakerFixture) attachToSession(t *testing.T, ctx context.Context) (sessionID, configID string) {
 	t.Helper()
 
@@ -94,9 +103,37 @@ func (f *speakerFixture) attachToSession(t *testing.T, ctx context.Context) (ses
 		_, _ = testDB.Exec(context.Background(), "DELETE FROM conference_config WHERE id = $1", configID)
 	})
 
+	var roomID string
 	err = testDB.QueryRow(ctx,
-		"INSERT INTO sessions (config_id, kind, title) VALUES ($1, 'session', 'TDD Speaker Test Session') RETURNING id",
-		configID,
+		"INSERT INTO rooms (config_id, name) VALUES ($1, $2) RETURNING id",
+		configID, testSpeakerRoomName,
+	).Scan(&roomID)
+	if err != nil {
+		t.Fatalf("failed to insert test room: %v", err)
+	}
+
+	var dayID string
+	err = testDB.QueryRow(ctx,
+		"INSERT INTO conference_days (config_id, day_index, date) VALUES ($1, 0, $2) RETURNING id",
+		configID, "2026-08-01",
+	).Scan(&dayID)
+	if err != nil {
+		t.Fatalf("failed to insert test conference_day: %v", err)
+	}
+
+	var trackID string
+	err = testDB.QueryRow(ctx,
+		"INSERT INTO tracks (day_id, room_id, color) VALUES ($1, $2, $3) RETURNING id",
+		dayID, roomID, testSpeakerTrackColor,
+	).Scan(&trackID)
+	if err != nil {
+		t.Fatalf("failed to insert test track: %v", err)
+	}
+
+	err = testDB.QueryRow(ctx,
+		`INSERT INTO sessions (config_id, kind, title, room_id, track_id)
+		 VALUES ($1, 'session', 'TDD Speaker Test Session', $2, $3) RETURNING id`,
+		configID, roomID, trackID,
 	).Scan(&sessionID)
 	if err != nil {
 		t.Fatalf("failed to insert test session: %v", err)
@@ -219,6 +256,12 @@ func TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions(t *te
 	}
 	if s.Sessions[0].Title != "TDD Speaker Test Session" {
 		t.Errorf("session title = %q, want %q", s.Sessions[0].Title, "TDD Speaker Test Session")
+	}
+	if s.Sessions[0].RoomName != testSpeakerRoomName {
+		t.Errorf("session roomName = %q, want %q", s.Sessions[0].RoomName, testSpeakerRoomName)
+	}
+	if s.Sessions[0].TrackColor != testSpeakerTrackColor {
+		t.Errorf("session trackColor = %q, want %q", s.Sessions[0].TrackColor, testSpeakerTrackColor)
 	}
 }
 

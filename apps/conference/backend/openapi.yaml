@@ -379,6 +379,12 @@ components:
         title: { type: string }
         startTime: { type: string, format: date-time }
         endTime: { type: string, format: date-time }
+        roomName: { type: string, description: Absent when the session has no room. }
+        trackColor:
+          type: string
+          description: >-
+            Hex colour of the session's track, e.g. "#2faf5a". Absent when the
+            session has no track — colour lives on the track, not the room.
     AttendeeSearchResult:
       type: object
       required: [items, page]
