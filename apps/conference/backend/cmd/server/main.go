@@ -94,6 +94,7 @@ func main() {
 	feedbackRepo := repository.NewFeedbackRepo(pool)
 	appConfigRepo := repository.NewAppConfigRepo(pool)
 	favoritesRepo := repository.NewFavoritesRepo(pool)
+	activityRepo := repository.NewActivityRepo(pool)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
@@ -121,6 +122,7 @@ func main() {
 	favoritesHandler := handlers.NewFavoritesHandler(favoritesRepo)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackRepo, eventRepo)
 	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
+	activityHandler := handlers.NewActivityHandler(activityRepo)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
 
 	r := gin.New()
@@ -168,6 +170,7 @@ func main() {
 		api.GET("/events", cacheable, eventHandler.List)
 		api.GET("/events/:eventId/agendas", cacheable, eventHandler.Agendas)
 		api.GET("/event-agendas", cacheable, eventHandler.LegacyAgendas)
+		api.GET("/activities", cacheable, activityHandler.List)
 
 		api.POST("/qr/scan", coinHandler.Scan)
 		api.GET("/qr/history", coinHandler.History)
