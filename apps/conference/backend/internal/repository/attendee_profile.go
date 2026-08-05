@@ -154,6 +154,34 @@ func (r *AttendeeProfileRepo) get(ctx context.Context, whereClause, arg string) 
 	return a, nil
 }
 
+// ListAllUUIDs returns every attendee's idp_uuid, for broadcasting a
+// notification to the whole conference. Rows whose idp_uuid is still NULL are
+// skipped: that column is only populated on an attendee's first IdP login
+// (migration 003), and a recipient with no uuid is not addressable by the
+// notification service. Ordering is unspecified -- the caller hands the whole
+// list over at once.
+func (r *AttendeeProfileRepo) ListAllUUIDs(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT DISTINCT idp_uuid FROM attendees WHERE idp_uuid IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var uuids []string
+	for rows.Next() {
+		var uuid string
+		if err := rows.Scan(&uuid); err != nil {
+			return nil, err
+		}
+		uuids = append(uuids, uuid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return uuids, nil
+}
+
 // PatchByEmail partially updates an attendee, leaving nil fields unchanged.
 // Returns ErrNotFound if no row matches email.
 func (r *AttendeeProfileRepo) PatchByEmail(ctx context.Context, email string, patch models.AttendeePatch, updatedBy string) error {
