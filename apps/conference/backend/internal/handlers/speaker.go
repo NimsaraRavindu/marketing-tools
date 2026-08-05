@@ -66,9 +66,16 @@ func (h *SpeakerHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, summaries)
 }
 
-// Get handles GET /speakers/:id.
+// Get handles GET /speakers/:id. speakers.id is a UUID column; same guard and
+// same reason as SessionHandler.Get.
 func (h *SpeakerHandler) Get(c *gin.Context) {
-	speaker, err := h.reader.GetSpeaker(c.Request.Context(), c.Param("id"))
+	id := c.Param("id")
+	if !uuidPattern.MatchString(id) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "id must be a valid UUID"})
+		return
+	}
+
+	speaker, err := h.reader.GetSpeaker(c.Request.Context(), id)
 	switch {
 	case err == nil:
 		c.JSON(http.StatusOK, speaker)

@@ -75,7 +75,7 @@ func (h *FavoritesHandler) Add(c *gin.Context) {
 	}
 
 	sessionID := c.Param("sessionId")
-	if !sessionIDPattern.MatchString(sessionID) {
+	if !uuidPattern.MatchString(sessionID) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "sessionId must be a valid UUID"})
 		return
 	}
@@ -99,7 +99,7 @@ func (h *FavoritesHandler) Remove(c *gin.Context) {
 	}
 
 	sessionID := c.Param("sessionId")
-	if !sessionIDPattern.MatchString(sessionID) {
+	if !uuidPattern.MatchString(sessionID) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "sessionId must be a valid UUID"})
 		return
 	}
