@@ -27,7 +27,7 @@ func TestSpeaker_JSONShape(t *testing.T) {
 		Name:        "John Doe",
 		Description: "Principal Engineer",
 		Bio:         "Works on integration.",
-		PhotoURL:    "https://example.com/jay.webp",
+		PhotoURL:    "https://example.com/john.webp",
 	}
 
 	b, err := json.Marshal(s)
@@ -72,7 +72,7 @@ func TestSpeakerSummary_CarriesNoSessions(t *testing.T) {
 		ID:       "speaker-1",
 		Name:     "John Doe",
 		Bio:      "Works on integration.",
-		PhotoURL: "https://example.com/jay.webp",
+		PhotoURL: "https://example.com/john.webp",
 	}
 
 	b, err := json.Marshal(s)
@@ -101,7 +101,7 @@ func TestSpeaker_EmbedsResolvedSessions(t *testing.T) {
 		ID:       "speaker-1",
 		Name:     "John Doe",
 		Bio:      "Works on integration.",
-		PhotoURL: "https://example.com/jay.webp",
+		PhotoURL: "https://example.com/john.webp",
 		Sessions: []SpeakerSession{
 			{ID: "session-1", Title: "Intro to WSO2"},
 		},

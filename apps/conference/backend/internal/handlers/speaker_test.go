@@ -114,10 +114,14 @@ func TestSpeakerHandler_List_RepositoryErrorReturns500(t *testing.T) {
 	}
 }
 
+// testSpeakerID is a syntactically valid UUID; see testSessionID for why the
+// :id path can't use a readable placeholder.
+const testSpeakerID = "b3d8e5f2-91a4-4c60-8d17-5fa2c7e93b48"
+
 func TestSpeakerHandler_Get_ReturnsSpeaker(t *testing.T) {
-	reader := &fakeSpeakerReader{speaker: models.Speaker{ID: "speaker-1", Name: "John Doe"}}
+	reader := &fakeSpeakerReader{speaker: models.Speaker{ID: testSpeakerID, Name: "John Doe"}}
 	h := NewSpeakerHandler(reader)
-	rec := doRequest(newSpeakerTestRouter(h), http.MethodGet, "/speakers/speaker-1", nil)
+	rec := doRequest(newSpeakerTestRouter(h), http.MethodGet, "/speakers/"+testSpeakerID, nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -127,14 +131,14 @@ func TestSpeakerHandler_Get_ReturnsSpeaker(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if got.ID != "speaker-1" {
-		t.Errorf("ID = %q, want %q", got.ID, "speaker-1")
+	if got.ID != testSpeakerID {
+		t.Errorf("ID = %q, want %q", got.ID, testSpeakerID)
 	}
 }
 
 func TestSpeakerHandler_Get_NotFoundReturns404(t *testing.T) {
 	h := NewSpeakerHandler(&fakeSpeakerReader{speakerErr: repository.ErrNotFound})
-	rec := doRequest(newSpeakerTestRouter(h), http.MethodGet, "/speakers/missing", nil)
+	rec := doRequest(newSpeakerTestRouter(h), http.MethodGet, "/speakers/"+testSpeakerID, nil)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
@@ -143,9 +147,21 @@ func TestSpeakerHandler_Get_NotFoundReturns404(t *testing.T) {
 
 func TestSpeakerHandler_Get_OtherErrorReturns500(t *testing.T) {
 	h := NewSpeakerHandler(&fakeSpeakerReader{speakerErr: errBoom})
-	rec := doRequest(newSpeakerTestRouter(h), http.MethodGet, "/speakers/speaker-1", nil)
+	rec := doRequest(newSpeakerTestRouter(h), http.MethodGet, "/speakers/"+testSpeakerID, nil)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+// speakers.id is a UUID column, same 22P02-to-500 exposure as /sessions/:id.
+func TestSpeakerHandler_Get_NonUUIDReturns400(t *testing.T) {
+	h := NewSpeakerHandler(&fakeSpeakerReader{speakerErr: errBoom})
+
+	for _, id := range []string{"events", "me", "b3d8e5f2"} {
+		rec := doRequest(newSpeakerTestRouter(h), http.MethodGet, "/speakers/"+id, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("GET /speakers/%q status = %d, want %d", id, rec.Code, http.StatusBadRequest)
+		}
 	}
 }

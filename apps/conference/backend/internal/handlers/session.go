@@ -47,9 +47,18 @@ func NewSessionHandler(reader SessionReader) *SessionHandler {
 	return &SessionHandler{reader: reader}
 }
 
-// Get handles GET /sessions/:id.
+// Get handles GET /sessions/:id. sessions.id is a UUID column, so a malformed
+// id is rejected here rather than sent to Postgres, whose conversion error
+// would otherwise surface as a 500. A mistyped path like /sessions/events hits
+// this route with id="events".
 func (h *SessionHandler) Get(c *gin.Context) {
-	session, err := h.reader.GetSession(c.Request.Context(), c.Param("id"))
+	id := c.Param("id")
+	if !uuidPattern.MatchString(id) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "id must be a valid UUID"})
+		return
+	}
+
+	session, err := h.reader.GetSession(c.Request.Context(), id)
 	switch {
 	case err == nil:
 		c.JSON(http.StatusOK, session)

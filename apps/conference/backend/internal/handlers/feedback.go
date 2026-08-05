@@ -33,10 +33,11 @@ type FeedbackReader interface {
 	Insert(ctx context.Context, in models.FeedbackInsert) error
 }
 
-// sessionIDPattern matches the textual form of a UUID. session_id is a UUID
-// column; without this check a malformed value reaches Postgres and its
-// conversion error surfaces as a 500 instead of a 400.
-var sessionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+// uuidPattern matches the textual form of a UUID. Every id this package
+// accepts from a client (session_id, sessionId, :id) targets a UUID column;
+// without this check a malformed value reaches Postgres and its conversion
+// error surfaces as a 500 instead of a 400.
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // FeedbackHandler exposes the feedback HTTP endpoint.
 type FeedbackHandler struct {
@@ -87,7 +88,7 @@ func (h *FeedbackHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "sessionId is required for session feedback"})
 			return
 		}
-		if !sessionIDPattern.MatchString(*req.SessionID) {
+		if !uuidPattern.MatchString(*req.SessionID) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "sessionId must be a valid UUID"})
 			return
 		}
