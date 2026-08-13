@@ -91,6 +91,11 @@ type AppConfigReader interface {
 	List(ctx context.Context) ([]models.AppConfig, error)
 }
 
+// ActivityReader is satisfied by *ActivityRepo.
+type ActivityReader interface {
+	List(ctx context.Context) ([]models.Activity, error)
+}
+
 // FavoritesReader is satisfied by *FavoritesRepo.
 type FavoritesReader interface {
 	List(ctx context.Context, userUUID string) ([]models.Favorite, error)
@@ -111,4 +116,5 @@ var (
 	_ FeedbackReader           = (*FeedbackRepo)(nil)
 	_ AppConfigReader          = (*AppConfigRepo)(nil)
 	_ FavoritesReader          = (*FavoritesRepo)(nil)
+	_ ActivityReader           = (*ActivityRepo)(nil)
 )

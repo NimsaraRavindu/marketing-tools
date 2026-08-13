@@ -21,10 +21,13 @@ import "time"
 // ActivityLocation is where an activity happens. Stored inline on the
 // activities row (migration 011) but kept nested in the response, matching
 // the shape the client already reads.
+// A location recorded with only a name omits the other two fields entirely
+// rather than emitting "", per the API-wide "optional scalars are omitted
+// when empty, never empty strings" convention (openapi.yaml header).
 type ActivityLocation struct {
 	Name         string `json:"name"`
-	Address      string `json:"address"`
-	FloorPlanURL string `json:"floorPlanUrl"`
+	Address      string `json:"address,omitempty"`
+	FloorPlanURL string `json:"floorPlanUrl,omitempty"`
 }
 
 // Activity is one non-session happening on the General page -- meals,
@@ -42,6 +45,7 @@ type Activity struct {
 	Location  *ActivityLocation `json:"location,omitempty"`
 
 	// Description is optional in practice; an activity with nothing to say
-	// beyond its name and time is normal.
-	Description string `json:"description"`
+	// beyond its name and time is normal, and is omitted rather than sent
+	// as an empty string.
+	Description string `json:"description,omitempty"`
 }

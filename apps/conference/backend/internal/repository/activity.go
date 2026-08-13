@@ -18,6 +18,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -25,14 +26,22 @@ import (
 )
 
 // ActivityRepo provides read access to the owned activities table
-// (migration 011).
+// (migration 011). loc is the venue timezone the stored instants are
+// re-anchored to on the way out, so the API emits the venue offset rather
+// than whatever zone the driver hands back (see config.Config.VenueLocation).
 type ActivityRepo struct {
 	pool *pgxpool.Pool
+	loc  *time.Location
 }
 
 // NewActivityRepo constructs an ActivityRepo backed by the given pool.
-func NewActivityRepo(pool *pgxpool.Pool) *ActivityRepo {
-	return &ActivityRepo{pool: pool}
+// loc is the venue timezone start/end times are presented in; a nil loc
+// defaults to UTC.
+func NewActivityRepo(pool *pgxpool.Pool, loc *time.Location) *ActivityRepo {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return &ActivityRepo{pool: pool, loc: loc}
 }
 
 // List returns every activity, ordered by name then start time.
@@ -64,6 +73,13 @@ func (r *ActivityRepo) List(ctx context.Context) ([]models.Activity, error) {
 		); err != nil {
 			return nil, err
 		}
+
+		// start_time/end_time are TIMESTAMPTZ, so the instant is already
+		// correct; .In only fixes which offset it serializes with, keeping
+		// the "ISO-8601 with a real venue offset, never a naive Z" contract
+		// the rest of the API holds (see openapi.yaml conventions).
+		a.StartTime = a.StartTime.In(r.loc)
+		a.EndTime = a.EndTime.In(r.loc)
 
 		// All three location columns default to '', so a row with nothing
 		// recorded yields no location object at all rather than one full of

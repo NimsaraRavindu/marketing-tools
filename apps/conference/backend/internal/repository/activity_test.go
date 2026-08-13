@@ -45,7 +45,7 @@ func insertActivity(t *testing.T, name, description string, start time.Time, loc
 
 func TestActivityRepo_ListReturnsNestedLocation(t *testing.T) {
 	ctx := context.Background()
-	repo := NewActivityRepo(testDB)
+	repo := NewActivityRepo(testDB, time.UTC)
 
 	name := "Registration " + newUUID()
 	start := time.Now().UTC().Truncate(time.Second)
@@ -85,7 +85,7 @@ func TestActivityRepo_ListReturnsNestedLocation(t *testing.T) {
 // come back with no location object rather than one full of empty strings.
 func TestActivityRepo_ListOmitsEmptyLocation(t *testing.T) {
 	ctx := context.Background()
-	repo := NewActivityRepo(testDB)
+	repo := NewActivityRepo(testDB, time.UTC)
 
 	id := insertActivity(t, "Hallway track "+newUUID(), "", time.Now().UTC(), "", "", "")
 
@@ -104,7 +104,7 @@ func TestActivityRepo_ListOmitsEmptyLocation(t *testing.T) {
 // groups by name and preserves the order it receives.
 func TestActivityRepo_ListOrdersOccurrencesByStartTime(t *testing.T) {
 	ctx := context.Background()
-	repo := NewActivityRepo(testDB)
+	repo := NewActivityRepo(testDB, time.UTC)
 
 	name := "Lunch " + newUUID()
 	day2 := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
