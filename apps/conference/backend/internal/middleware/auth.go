@@ -40,11 +40,29 @@ type UserInfo struct {
 	UserID     string // JWT sub claim
 	GivenName  string
 	FamilyName string
+	// Groups is the JWT groups claim, the IdP's role memberships for this
+	// user. Only admin-gated routes read it (see HasAnyGroup); an absent
+	// claim yields nil, which denies rather than allows.
+	Groups []string
 	// RawToken is the literal incoming x-jwt-assertion value, before any
 	// parsing. The AI agent routes forward this verbatim to external AI
 	// services (pure pass-through auth, see .claude/PLAN.md) -- everything
 	// else uses the parsed claims above instead.
 	RawToken string
+}
+
+// HasAnyGroup reports whether the user belongs to at least one of want.
+// An empty want denies: an admin-gated route whose allow-list was never
+// configured must not fall open to every authenticated caller.
+func (u *UserInfo) HasAnyGroup(want []string) bool {
+	for _, w := range want {
+		for _, g := range u.Groups {
+			if g == w {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // AuthConfig holds JWT validation configuration.
@@ -57,10 +75,11 @@ type AuthConfig struct {
 }
 
 type jwtClaims struct {
-	Email                string `json:"email"`
-	GivenName            string `json:"given_name"`
-	FamilyName           string `json:"family_name"`
-	jwt.RegisteredClaims        // Sub carries the user UUID
+	Email                string   `json:"email"`
+	GivenName            string   `json:"given_name"`
+	FamilyName           string   `json:"family_name"`
+	Groups               []string `json:"groups"`
+	jwt.RegisteredClaims          // Sub carries the user UUID
 }
 
 // Auth returns a Gin middleware that validates the x-jwt-assertion header on
@@ -140,10 +159,13 @@ func extractUserInfo(tokenStr string, cfg AuthConfig, keyFunc jwt.Keyfunc) (*Use
 		return nil, fmt.Errorf("token missing sub claim")
 	}
 
+	// A missing groups claim is not an error: every route except the
+	// admin-gated ones ignores it, and those deny on an empty list anyway.
 	return &UserInfo{
 		Email:      c.Email,
 		UserID:     c.Subject,
 		GivenName:  c.GivenName,
 		FamilyName: c.FamilyName,
+		Groups:     c.Groups,
 	}, nil
 }

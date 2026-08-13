@@ -99,6 +99,94 @@ func TestAuth_UnverifiedMode_DecodesValidToken(t *testing.T) {
 	}
 }
 
+func TestAuth_UnverifiedMode_ExtractsGroupsClaim(t *testing.T) {
+	r := gin.New()
+	r.Use(Auth(AuthConfig{TokenValidatorEnabled: false}))
+
+	var got *UserInfo
+	r.GET("/ping", func(c *gin.Context) {
+		got = UserInfoFromContext(c.Request.Context())
+		c.Status(http.StatusOK)
+	})
+
+	token := unverifiedToken(t, jwtClaims{
+		Email:            "admin@example.com",
+		Groups:           []string{"wso2-everyone", "app-con-registrant-admin"},
+		RegisteredClaims: jwt.RegisteredClaims{Subject: "user-uuid-123"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	req.Header.Set(jwtAssertionHeader, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got == nil {
+		t.Fatal("expected UserInfo to be set in context")
+	}
+	if len(got.Groups) != 2 || got.Groups[0] != "wso2-everyone" {
+		t.Errorf("Groups = %v, want [wso2-everyone app-con-registrant-admin]", got.Groups)
+	}
+}
+
+// The groups claim is optional: only admin-gated routes read it, and those
+// deny on an empty list, so its absence must not reject the token.
+func TestAuth_UnverifiedMode_MissingGroupsClaimIsAllowed(t *testing.T) {
+	r := gin.New()
+	r.Use(Auth(AuthConfig{TokenValidatorEnabled: false}))
+
+	var got *UserInfo
+	r.GET("/ping", func(c *gin.Context) {
+		got = UserInfoFromContext(c.Request.Context())
+		c.Status(http.StatusOK)
+	})
+
+	token := unverifiedToken(t, jwtClaims{
+		Email:            "attendee@example.com",
+		RegisteredClaims: jwt.RegisteredClaims{Subject: "user-uuid-123"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	req.Header.Set(jwtAssertionHeader, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if len(got.Groups) != 0 {
+		t.Errorf("Groups = %v, want empty", got.Groups)
+	}
+	if got.HasAnyGroup([]string{"app-con-registrant-admin"}) {
+		t.Error("HasAnyGroup returned true for a user with no groups")
+	}
+}
+
+func TestUserInfo_HasAnyGroup(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups []string
+		want   []string
+		expect bool
+	}{
+		{"matches one of several", []string{"a", "b"}, []string{"x", "b"}, true},
+		{"no overlap", []string{"a"}, []string{"x"}, false},
+		{"empty allow-list denies", []string{"a"}, nil, false},
+		{"no groups denies", nil, []string{"a"}, false},
+		{"both empty denies", nil, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := &UserInfo{Groups: tt.groups}
+			if got := u.HasAnyGroup(tt.want); got != tt.expect {
+				t.Errorf("HasAnyGroup(%v) with groups %v = %v, want %v", tt.want, tt.groups, got, tt.expect)
+			}
+		})
+	}
+}
+
 func TestAuth_UnverifiedMode_MissingEmailClaim_Returns401(t *testing.T) {
 	r := newRouter(AuthConfig{TokenValidatorEnabled: false})
 	claims := jwtClaims{
