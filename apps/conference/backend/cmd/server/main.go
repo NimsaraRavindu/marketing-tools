@@ -97,6 +97,7 @@ func main() {
 	appConfigRepo := repository.NewAppConfigRepo(pool)
 	favoritesRepo := repository.NewFavoritesRepo(pool)
 	shopRepo := repository.NewShopRepo(pool)
+	leaderboardRepo := repository.NewLeaderboardRepo(pool, cfg.PIIEncryptionKey)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
@@ -128,6 +129,7 @@ func main() {
 	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo, cfg.CoinMasterWalletAddress)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
 	shopHandler := handlers.NewShopHandler(shopService, cfg.AdminRoles)
+	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardRepo)
 	walletHandler := handlers.NewWalletHandler(walletClient, txClient, shopRepo)
 
 	r := gin.New()
@@ -214,6 +216,11 @@ func main() {
 		// Shop admin routes
 		api.GET("/admin/shops/orders", shopHandler.GetAllOrders)
 		api.PUT("/admin/shops/orders/:orderId/status", shopHandler.UpdateOrderStatus)
+
+		// Leaderboard route
+		api.GET("/leaderboard", leaderboardHandler.GetLeaderboard)
+		api.GET("/leaderboard/preferences", leaderboardHandler.GetPreferences)
+		api.PUT("/leaderboard/preferences", leaderboardHandler.UpdatePreferences)
 
 		// Wallet routes
 		api.GET("/wallets/balances/me", walletHandler.GetBalance)
