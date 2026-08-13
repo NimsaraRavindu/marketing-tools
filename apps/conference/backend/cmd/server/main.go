@@ -129,7 +129,7 @@ func main() {
 	
 	// Start the cron job for cancelling stale shop orders
 	go shopService.Start(context.Background())
-	coinHandler := handlers.NewCoinHandler(coinService, coinAllocationRepo)
+	coinHandler := handlers.NewCoinHandler(coinService, coinAllocationRepo, qrPortalClient, cfg.AdminRoles)
 	speakerHandler := handlers.NewSpeakerHandler(speakerRepo)
 	sessionHandler := handlers.NewSessionHandler(sessionRepo)
 	eventHandler := handlers.NewEventHandler(eventRepo)
@@ -199,6 +199,7 @@ func main() {
 		api.POST("/qr/scan", coinHandler.Scan)
 		api.GET("/qr/history", coinHandler.History)
 		api.GET("/qr/summary", coinHandler.Summary)
+		api.GET("/qr-codes", coinHandler.GetGeneratedQRs)
 
 		api.POST("/attendees", attendeeHandler.Create)
 		api.PATCH("/attendees", attendeeHandler.Patch)

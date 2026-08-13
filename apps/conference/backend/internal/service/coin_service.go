@@ -99,7 +99,7 @@ func NewCoinService(
 // error should be classified by the handler layer via errors.Is against the
 // sentinel errors above (403/400 cases); anything else is an unexpected
 // failure (500).
-func (s *CoinService) ScanQR(ctx context.Context, userID, email, qrID string) error {
+func (s *CoinService) ScanQR(ctx context.Context, userID, email, qrID string, jwtAssertion string) error {
 	registered, err := s.attendees.IsRegistered(ctx, email)
 	if err != nil {
 		return fmt.Errorf("service: checking attendee registration: %w", err)

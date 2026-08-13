@@ -114,3 +114,35 @@ func (c *Client) GetQRCode(ctx context.Context, qrID string) (*models.Conference
 
 	return &qrCode, nil
 }
+
+// GetQRCodes fetches all generated QR codes from the external QR Portal service.
+func (c *Client) GetQRCodes(ctx context.Context) (*models.ConferenceQrCodesResponse, error) {
+	reqURL, err := url.JoinPath(c.baseURL, "qr-codes")
+	if err != nil {
+		return nil, fmt.Errorf("qrportal: building URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("qrportal: building request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("qrportal: request to %s failed: %w", reqURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
+		return nil, fmt.Errorf("qrportal: GET %s returned status %d: %s", reqURL, resp.StatusCode, body)
+	}
+
+	var res models.ConferenceQrCodesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("qrportal: decoding response body: %w", err)
+	}
+
+	return &res, nil
+}

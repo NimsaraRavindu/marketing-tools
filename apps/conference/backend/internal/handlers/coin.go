@@ -21,6 +21,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -31,7 +32,7 @@ import (
 
 // CoinScanner runs the QR-scan business workflow. Satisfied by *service.CoinService.
 type CoinScanner interface {
-	ScanQR(ctx context.Context, userID, email, qrID string) error
+	ScanQR(ctx context.Context, userID, email, qrID string, jwtAssertion string) error
 }
 
 // CoinHistoryReader reads a user's coin allocation history/summary. Satisfied by *repository.CoinAllocationRepo.
@@ -41,14 +42,21 @@ type CoinHistoryReader interface {
 }
 
 // CoinHandler exposes the WSO2 Coin / O2C HTTP endpoints.
+type QrCatalogReader interface {
+	GetQRCodes(ctx context.Context) (*models.ConferenceQrCodesResponse, error)
+}
+
+// CoinHandler exposes the WSO2 Coin / O2C HTTP endpoints.
 type CoinHandler struct {
-	scanner CoinScanner
-	reader  CoinHistoryReader
+	scanner    CoinScanner
+	reader     CoinHistoryReader
+	catalog    QrCatalogReader
+	adminRoles []string
 }
 
 // NewCoinHandler constructs a CoinHandler.
-func NewCoinHandler(scanner CoinScanner, reader CoinHistoryReader) *CoinHandler {
-	return &CoinHandler{scanner: scanner, reader: reader}
+func NewCoinHandler(scanner CoinScanner, reader CoinHistoryReader, catalog QrCatalogReader, adminRoles []string) *CoinHandler {
+	return &CoinHandler{scanner: scanner, reader: reader, catalog: catalog, adminRoles: adminRoles}
 }
 
 // Scan handles POST /qr/scan.
@@ -65,7 +73,7 @@ func (h *CoinHandler) Scan(c *gin.Context) {
 		return
 	}
 
-	err := h.scanner.ScanQR(c.Request.Context(), user.UserID, user.Email, req.QrID)
+	err := h.scanner.ScanQR(c.Request.Context(), user.UserID, user.Email, req.QrID, user.RawToken)
 	switch {
 	case err == nil:
 		c.Status(http.StatusOK)
@@ -117,4 +125,60 @@ func (h *CoinHandler) Summary(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, summary)
+}
+
+// GetGeneratedQRs handles GET /qr/admin.
+func (h *CoinHandler) GetGeneratedQRs(c *gin.Context) {
+	user := middleware.UserInfoFromContext(c.Request.Context())
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "missing authentication"})
+		return
+	}
+
+	isAdmin := false
+	for _, g := range user.Groups {
+		for _, adminRole := range h.adminRoles {
+			if g == adminRole {
+				isAdmin = true
+				break
+			}
+		}
+		if isAdmin {
+			break
+		}
+	}
+
+	res, err := h.catalog.GetQRCodes(c.Request.Context())
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to fetch qr codes from portal", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "internal error"})
+		return
+	}
+
+	if isAdmin {
+		c.JSON(http.StatusOK, res)
+		return
+	}
+
+	// Not an admin: filter QRs based on user email domain
+	emailParts := strings.Split(user.Email, "@")
+	slog.InfoContext(c.Request.Context(), "GetGeneratedQRs: filtering for non-admin", "email", user.Email, "emailParts", len(emailParts))
+	if len(emailParts) != 2 {
+		c.JSON(http.StatusOK, models.ConferenceQrCodesResponse{Qrs: []models.ConferenceQrCode{}, TotalCount: 0})
+		return
+	}
+	userDomain := emailParts[1]
+	slog.InfoContext(c.Request.Context(), "GetGeneratedQRs: user domain identified", "userDomain", userDomain)
+
+	var filtered []models.ConferenceQrCode
+	for _, qr := range res.Qrs {
+		if qr.Info.Domain == userDomain {
+			filtered = append(filtered, qr)
+		}
+	}
+
+	c.JSON(http.StatusOK, models.ConferenceQrCodesResponse{
+		Qrs:        filtered,
+		TotalCount: len(filtered),
+	})
 }
