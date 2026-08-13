@@ -97,7 +97,6 @@ func main() {
 	appConfigRepo := repository.NewAppConfigRepo(pool)
 	favoritesRepo := repository.NewFavoritesRepo(pool)
 	shopRepo := repository.NewShopRepo(pool)
-	leaderboardRepo := repository.NewLeaderboardRepo(pool, cfg.PIIEncryptionKey)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
@@ -111,6 +110,7 @@ func main() {
 		sessionRepo,
 		qrPortalClient,
 		walletClient,
+		txClient,
 		service.ScanConfig{
 			ExcludeEmployeeCoinAllocation: cfg.ExcludeEmployeeCoinAllocation,
 			EnableQrValidations:           cfg.EnableQrValidations,
@@ -118,7 +118,9 @@ func main() {
 		},
 	)
 
-	coinHandler := handlers.NewCoinHandler(coinService, coinAllocationRepo)
+	shopService := service.NewShopService(shopRepo, appConfigRepo, coinAllocationRepo, txClient, emailClient, &cfg)
+
+	coinHandler := handlers.NewCoinHandler(coinService, coinAllocationRepo, qrPortalClient, cfg.AdminRoles)
 	speakerHandler := handlers.NewSpeakerHandler(speakerRepo)
 	sessionHandler := handlers.NewSessionHandler(sessionRepo)
 	eventHandler := handlers.NewEventHandler(eventRepo)
@@ -129,7 +131,6 @@ func main() {
 	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo, cfg.CoinMasterWalletAddress)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
 	shopHandler := handlers.NewShopHandler(shopService, cfg.AdminRoles)
-	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardRepo)
 	walletHandler := handlers.NewWalletHandler(walletClient, txClient, shopRepo)
 
 	r := gin.New()
@@ -139,7 +140,7 @@ func main() {
 			c.Header("Access-Control-Allow-Origin", "*")
 			// PUT/DELETE back favorites; PATCH backs the attendee update.
 			c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Content-Type,x-jwt-assertion")
+			c.Header("Access-Control-Allow-Headers", "Content-Type,x-jwt-assertion,Authorization,Accept")
 			if c.Request.Method == http.MethodOptions {
 				c.AbortWithStatus(http.StatusNoContent)
 				return
@@ -181,6 +182,7 @@ func main() {
 		api.POST("/qr/scan", coinHandler.Scan)
 		api.GET("/qr/history", coinHandler.History)
 		api.GET("/qr/summary", coinHandler.Summary)
+		api.GET("/qr-codes", coinHandler.GetGeneratedQRs)
 
 		api.POST("/attendees", attendeeHandler.Create)
 		api.PATCH("/attendees", attendeeHandler.Patch)
@@ -216,11 +218,6 @@ func main() {
 		// Shop admin routes
 		api.GET("/admin/shops/orders", shopHandler.GetAllOrders)
 		api.PUT("/admin/shops/orders/:orderId/status", shopHandler.UpdateOrderStatus)
-
-		// Leaderboard route
-		api.GET("/leaderboard", leaderboardHandler.GetLeaderboard)
-		api.GET("/leaderboard/preferences", leaderboardHandler.GetPreferences)
-		api.PUT("/leaderboard/preferences", leaderboardHandler.UpdatePreferences)
 
 		// Wallet routes
 		api.GET("/wallets/balances/me", walletHandler.GetBalance)

@@ -45,6 +45,7 @@ type UserInfo struct {
 	// services (pure pass-through auth, see .claude/PLAN.md) -- everything
 	// else uses the parsed claims above instead.
 	RawToken string
+	Groups   []string
 }
 
 // AuthConfig holds JWT validation configuration.
@@ -57,10 +58,12 @@ type AuthConfig struct {
 }
 
 type jwtClaims struct {
-	Email                string `json:"email"`
-	GivenName            string `json:"given_name"`
-	FamilyName           string `json:"family_name"`
-	jwt.RegisteredClaims        // Sub carries the user UUID
+	Email                string   `json:"email"`
+	GivenName            string   `json:"given_name"`
+	FamilyName           string   `json:"family_name"`
+	UserID               string   `json:"userid"`
+	Groups               []string `json:"groups"`
+	jwt.RegisteredClaims          // Sub carries the user UUID
 }
 
 // Auth returns a Gin middleware that validates the x-jwt-assertion header on
@@ -136,14 +139,21 @@ func extractUserInfo(tokenStr string, cfg AuthConfig, keyFunc jwt.Keyfunc) (*Use
 	if c.Email == "" {
 		return nil, fmt.Errorf("token missing email claim")
 	}
-	if c.Subject == "" {
-		return nil, fmt.Errorf("token missing sub claim")
+
+	userID := c.UserID
+	if userID == "" {
+		userID = c.Subject
+	}
+
+	if userID == "" {
+		return nil, fmt.Errorf("token missing sub or userid claim")
 	}
 
 	return &UserInfo{
 		Email:      c.Email,
-		UserID:     c.Subject,
+		UserID:     userID,
 		GivenName:  c.GivenName,
 		FamilyName: c.FamilyName,
+		Groups:     c.Groups,
 	}, nil
 }
