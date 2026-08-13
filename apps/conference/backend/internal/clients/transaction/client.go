@@ -33,6 +33,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -127,6 +128,118 @@ func (c *Client) TransferToken(ctx context.Context, recipientWalletAddress strin
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
 		return fmt.Errorf("transaction: POST %s returned status %d: %s", reqURL, resp.StatusCode, body)
+	}
+
+	return nil
+}
+
+// GetWalletBalanceRequest payload response format
+type GetWalletBalanceResponse struct {
+	Payload struct {
+		Balance string `json:"balance"`
+	} `json:"payload"`
+}
+
+// GetWalletBalance fetches the on-chain balance for a given wallet address.
+func (c *Client) GetWalletBalance(ctx context.Context, walletAddress string) (float64, error) {
+	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-balance", walletAddress)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: building URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: building request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
+		return 0, fmt.Errorf("transaction: GET %s returned status %d: %s", reqURL, resp.StatusCode, body)
+	}
+
+	var parsedResp GetWalletBalanceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsedResp); err != nil {
+		return 0, fmt.Errorf("transaction: parsing response: %w", err)
+	}
+
+	var balance float64
+	fmt.Sscanf(parsedResp.Payload.Balance, "%f", &balance)
+	return balance, nil
+}
+
+type TransactionDetailsResponse struct {
+	Payload struct {
+		Found           bool   `json:"found"`
+		Status          string `json:"status"`
+		Success         bool   `json:"success"`
+		AmountFormatted *string `json:"amountFormatted"`
+		DecodedData     *struct {
+			Name string   `json:"name"`
+			Args []string `json:"args"`
+		} `json:"decodedData"`
+	} `json:"payload"`
+}
+
+func (c *Client) ConfirmTransaction(ctx context.Context, txHash string, masterWalletAddress string, expectedAmount float64) error {
+	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-transaction-details", txHash)
+	if err != nil {
+		return fmt.Errorf("transaction: building URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return fmt.Errorf("transaction: building request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("transaction: request to %s failed: %w", reqURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
+		return fmt.Errorf("transaction: GET %s returned status %d: %s", reqURL, resp.StatusCode, body)
+	}
+
+	var data TransactionDetailsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return fmt.Errorf("transaction: decoding response: %w", err)
+	}
+
+	payload := data.Payload
+	if !payload.Found {
+		return fmt.Errorf("transaction not found on-chain")
+	}
+	if payload.DecodedData == nil {
+		return fmt.Errorf("decoded transaction data missing; cannot verify recipient")
+	}
+	if payload.DecodedData.Name != "transfer" || len(payload.DecodedData.Args) < 1 {
+		return fmt.Errorf("decoded transfer recipient missing; cannot verify recipient")
+	}
+	toAddress := payload.DecodedData.Args[0]
+	if !strings.EqualFold(toAddress, masterWalletAddress) {
+		return fmt.Errorf("transaction recipient does not match master wallet")
+	}
+	if payload.AmountFormatted == nil {
+		return fmt.Errorf("transaction amount missing; cannot verify")
+	}
+	var actualAmount float64
+	if _, err := fmt.Sscanf(*payload.AmountFormatted, "%f", &actualAmount); err != nil {
+		return fmt.Errorf("transaction amount invalid; cannot verify")
+	}
+	if actualAmount != expectedAmount {
+		return fmt.Errorf("transaction amount does not match expected order amount")
+	}
+	if !payload.Success || payload.Status != "SUCCESS" {
+		return fmt.Errorf("transaction not successful: %s", payload.Status)
 	}
 
 	return nil

@@ -98,6 +98,27 @@ type FavoritesReader interface {
 	Remove(ctx context.Context, userUUID, sessionID string) error
 }
 
+type ShopRepository interface {
+	GetActiveEventID(ctx context.Context) (*string, error)
+	GetShopClosingTime(ctx context.Context, activeEventID *string) (*time.Time, error)
+	GetVisibleItems(ctx context.Context, activeEventID *string) ([]models.ShopItem, error)
+	GetPendingOrderByIdempotencyKey(ctx context.Context, userUUID, idempotencyKey string) (*models.ShopOrder, error)
+	UpdateShopOrderShippingDetails(ctx context.Context, orderID string, req models.ShopOrder) error
+	GetPastPurchasedQuantities(ctx context.Context, userUUID string, activeEventID *string) (map[string]int, error)
+	GetUserPendingOrdersCount(ctx context.Context, userUUID string, activeEventID *string) (int, error)
+	CreateOrder(ctx context.Context, order models.ShopOrder) error
+	UpdateOrderStatus(ctx context.Context, orderID, status, updatedBy string) error
+	ConfirmOrder(ctx context.Context, orderID, updatedBy string, txHash *string) error
+	MarkStaleOrders(ctx context.Context, timeoutMinutes int) (int, error)
+	GetOrderByTransactionHash(ctx context.Context, txHash string) (*models.ShopOrder, error)
+	GetOrderById(ctx context.Context, orderID string) (*models.ShopOrder, error)
+	CancelOrderAndRestoreStock(ctx context.Context, orderID string) error
+	GetOrderWithItemsById(ctx context.Context, orderID string) (*models.ShopOrder, error)
+	GetEventName(ctx context.Context, eventID *string) (string, error)
+	GetUserOrders(ctx context.Context, userUUID string, activeEventID *string) ([]models.ShopOrder, error)
+	GetAllOrders(ctx context.Context) ([]models.ShopOrder, error)
+}
+
 // Compile-time assertions that the concrete repos satisfy their interfaces.
 var (
 	_ AttendeeRepository       = (*AttendeeRepo)(nil)
@@ -111,4 +132,5 @@ var (
 	_ FeedbackReader           = (*FeedbackRepo)(nil)
 	_ AppConfigReader          = (*AppConfigRepo)(nil)
 	_ FavoritesReader          = (*FavoritesRepo)(nil)
+	_ ShopRepository           = (*ShopRepo)(nil)
 )

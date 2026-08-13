@@ -40,6 +40,13 @@ type ExternalServiceConfig struct {
 	OAuth    OAuthClientConfig
 }
 
+// EmailServiceConfig holds configuration for the email service.
+type EmailServiceConfig struct {
+	Endpoint string
+	OAuth    OAuthClientConfig
+	From     string
+}
+
 // AIAgentConfig holds the base URLs for the external AI agent services
 // (matchmaking, personalize, picked-for-you, chat) and the shared request
 // timeout applied to all of them. Deliberately no OAuth sub-struct: unlike
@@ -95,6 +102,12 @@ type Config struct {
 	// a different slot size.
 	SessionSlotMinutes int
 
+	ShopRefreshTimeSeconds           int
+	StaleOrderCleanupIntervalSeconds int
+	CoinMaxPendingOrdersPerUser      int
+	CoinStaleOrderTimeoutMinutes     int
+	CoinMasterWalletAddress          string
+
 	// VenueTimezone is the IANA name of the conference venue's timezone
 	// (VENUE_TIMEZONE env, default "UTC"). Session times are stored as a
 	// day date + slot offset with no zone in the shared schema, so the wall
@@ -122,6 +135,7 @@ type Config struct {
 	QRPortal    ExternalServiceConfig
 	Wallet      ExternalServiceConfig
 	Transaction ExternalServiceConfig
+	Email       EmailServiceConfig
 
 	// AI Features
 	AIAgent         AIAgentConfig
@@ -168,6 +182,34 @@ func Load() Config {
 		}
 	}
 
+	shopRefreshTimeSeconds := 15
+	if v := os.Getenv("SHOP_REFRESH_TIME_SECONDS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			shopRefreshTimeSeconds = parsed
+		}
+	}
+
+	staleOrderCleanupIntervalSeconds := 300
+	if v := os.Getenv("STALE_ORDER_CLEANUP_INTERVAL_SECONDS"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			staleOrderCleanupIntervalSeconds = int(parsed)
+		}
+	}
+
+	coinMaxPendingOrdersPerUser := 3
+	if v := os.Getenv("COIN_MAX_PENDING_ORDERS_PER_USER"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			coinMaxPendingOrdersPerUser = parsed
+		}
+	}
+
+	coinStaleOrderTimeoutMinutes := 5
+	if v := os.Getenv("COIN_STALE_ORDER_TIMEOUT_MINUTES"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			coinStaleOrderTimeoutMinutes = parsed
+		}
+	}
+
 	// Decoded best-effort here; Validate() is where a missing/malformed key
 	// is actually rejected, matching this file's existing Load()-is-tolerant,
 	// Validate()-is-strict split.
@@ -206,10 +248,15 @@ func Load() Config {
 		TokenValidatorEnabled: tokenValidatorEnabled,
 		AdminRoles:            parseList(os.Getenv("RBAC_ADMIN_ROLES")),
 
-		ExcludeEmployeeCoinAllocation: excludeEmployeeCoinAllocation,
-		EnableQrValidations:           enableQrValidations,
-		SessionEndTimeOffsetMinutes:   sessionEndTimeOffsetMinutes,
-		SessionSlotMinutes:            sessionSlotMinutes,
+		ExcludeEmployeeCoinAllocation:    excludeEmployeeCoinAllocation,
+		EnableQrValidations:              enableQrValidations,
+		SessionEndTimeOffsetMinutes:      sessionEndTimeOffsetMinutes,
+		SessionSlotMinutes:               sessionSlotMinutes,
+		ShopRefreshTimeSeconds:           shopRefreshTimeSeconds,
+		StaleOrderCleanupIntervalSeconds: staleOrderCleanupIntervalSeconds,
+		CoinMaxPendingOrdersPerUser:      coinMaxPendingOrdersPerUser,
+		CoinStaleOrderTimeoutMinutes:     coinStaleOrderTimeoutMinutes,
+		CoinMasterWalletAddress:       os.Getenv("COIN_MASTER_WALLET_ADDRESS"),
 		VenueTimezone:                 venueTimezone,
 		VenueLocation:                 venueLocation,
 		venueTZLoadErr:                venueTZLoadErr,
@@ -239,6 +286,15 @@ func Load() Config {
 				ClientID:     os.Getenv("TRANSACTION_CLIENT_ID"),
 				ClientSecret: os.Getenv("TRANSACTION_CLIENT_SECRET"),
 			},
+		},
+		Email: EmailServiceConfig{
+			Endpoint: os.Getenv("EMAIL_SERVICE_URL"),
+			OAuth: OAuthClientConfig{
+				TokenURL:     os.Getenv("EMAIL_OAUTH_TOKEN_URL"),
+				ClientID:     os.Getenv("EMAIL_OAUTH_CLIENT_ID"),
+				ClientSecret: os.Getenv("EMAIL_OAUTH_CLIENT_SECRET"),
+			},
+			From: os.Getenv("EMAIL_FROM"),
 		},
 
 		AIAgent: AIAgentConfig{

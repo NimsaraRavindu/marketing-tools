@@ -46,7 +46,7 @@ func TestAppConfigHandler_List_Success(t *testing.T) {
 	reader := &fakeAppConfigReader{configs: []models.AppConfig{
 		{Key: "ATTENDEES_SYNC", Value: "COMPLETED", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
 	}}
-	h := NewAppConfigHandler(reader)
+	h := NewAppConfigHandler(reader, "mock_master_wallet_address")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -58,13 +58,13 @@ func TestAppConfigHandler_List_Success(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(got) != 1 || got[0].Key != "ATTENDEES_SYNC" {
+	if len(got) != 2 || got[0].Key != "ATTENDEES_SYNC" || got[1].Key != "merchantWalletAddress" {
 		t.Errorf("unexpected response: %+v", got)
 	}
 }
 
 func TestAppConfigHandler_List_EmptyReturnsEmptyArrayNotNull(t *testing.T) {
-	h := NewAppConfigHandler(&fakeAppConfigReader{configs: nil})
+	h := NewAppConfigHandler(&fakeAppConfigReader{configs: nil}, "mock_master_wallet_address")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -72,13 +72,17 @@ func TestAppConfigHandler_List_EmptyReturnsEmptyArrayNotNull(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
-	if w.Body.String() != "[]" {
-		t.Errorf("body = %q, want empty JSON array", w.Body.String())
+	var got []models.AppConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got) != 1 || got[0].Key != "merchantWalletAddress" {
+		t.Errorf("body = %q, want just merchant wallet JSON array", w.Body.String())
 	}
 }
 
 func TestAppConfigHandler_List_RepoErrorMapsTo500(t *testing.T) {
-	h := NewAppConfigHandler(&fakeAppConfigReader{err: errBoom})
+	h := NewAppConfigHandler(&fakeAppConfigReader{err: errBoom}, "mock_master_wallet_address")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)

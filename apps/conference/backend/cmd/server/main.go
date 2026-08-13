@@ -27,7 +27,9 @@ import (
 	"time"
 
 	"wso2-coin-backend/internal/clients/aiagent"
+	"wso2-coin-backend/internal/clients/email"
 	"wso2-coin-backend/internal/clients/qrportal"
+	"wso2-coin-backend/internal/clients/transaction"
 	"wso2-coin-backend/internal/clients/wallet"
 	"wso2-coin-backend/internal/config"
 	"wso2-coin-backend/internal/db"
@@ -94,10 +96,13 @@ func main() {
 	feedbackRepo := repository.NewFeedbackRepo(pool)
 	appConfigRepo := repository.NewAppConfigRepo(pool)
 	favoritesRepo := repository.NewFavoritesRepo(pool)
+	shopRepo := repository.NewShopRepo(pool)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
+	txClient := transaction.NewClient(cfg.Transaction)
 	aiAgentClient := aiagent.NewClient(cfg.AIAgent)
+	emailClient := email.NewClient(cfg.Email)
 
 	coinService := service.NewCoinService(
 		attendeeRepo,
@@ -120,8 +125,10 @@ func main() {
 	connectionHandler := handlers.NewConnectionHandler(connectionRepo, attendeeProfileRepo)
 	favoritesHandler := handlers.NewFavoritesHandler(favoritesRepo)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackRepo, eventRepo)
-	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
+	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo, cfg.CoinMasterWalletAddress)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
+	shopHandler := handlers.NewShopHandler(shopService, cfg.AdminRoles)
+	walletHandler := handlers.NewWalletHandler(walletClient, txClient, shopRepo)
 
 	r := gin.New()
 
@@ -197,6 +204,19 @@ func main() {
 		api.POST("/users/profile", aiAgentHandler.PersonalizedProfile)
 		api.GET("/agenda/recommendations", aiAgentHandler.AgendaRecommendations)
 		api.POST("/assistant/chat", aiAgentHandler.Chat)
+
+		// Shop routes
+		api.GET("/shops/items", shopHandler.GetVisibleItems)
+		api.POST("/shops/checkout", shopHandler.Checkout)
+		api.POST("/shops/checkout/confirm", shopHandler.CheckoutConfirm)
+		api.GET("/shops/orders/me", shopHandler.GetUserOrders)
+
+		// Shop admin routes
+		api.GET("/admin/shops/orders", shopHandler.GetAllOrders)
+		api.PUT("/admin/shops/orders/:orderId/status", shopHandler.UpdateOrderStatus)
+
+		// Wallet routes
+		api.GET("/wallets/balances/me", walletHandler.GetBalance)
 	}
 
 	srv := &http.Server{
