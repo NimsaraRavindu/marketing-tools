@@ -118,6 +118,12 @@ type ShopRepository interface {
 	MarkStaleOrders(ctx context.Context, timeoutMinutes int) (int, error)
 }
 
+type LeaderboardReader interface {
+	GetLeaderboard(ctx context.Context, limit int) ([]models.LeaderboardEntry, error)
+	GetPreferences(ctx context.Context, userUUID string) (bool, error)
+	UpdatePreferences(ctx context.Context, userUUID string, showFullName bool) error
+}
+
 // Compile-time assertions that the concrete repos satisfy their interfaces.
 var (
 	_ AttendeeRepository       = (*AttendeeRepo)(nil)
@@ -133,4 +139,5 @@ var (
 	_ FavoritesReader          = (*FavoritesRepo)(nil)
 	_ ActivityReader           = (*ActivityRepo)(nil)
 	_ ShopRepository           = (*ShopRepo)(nil)
+	_ LeaderboardReader        = (*LeaderboardRepo)(nil)
 )

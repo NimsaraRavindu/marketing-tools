@@ -99,6 +99,7 @@ func main() {
 	favoritesRepo := repository.NewFavoritesRepo(pool)
 	activityRepo := repository.NewActivityRepo(pool, cfg.SessionSlotMinutes, cfg.VenueLocation)
 	shopRepo := repository.NewShopRepo(pool)
+	leaderboardRepo := repository.NewLeaderboardRepo(pool, cfg.PIIEncryptionKey)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
@@ -128,7 +129,6 @@ func main() {
 	
 	// Start the cron job for cancelling stale shop orders
 	go shopService.Start(context.Background())
-
 	coinHandler := handlers.NewCoinHandler(coinService, coinAllocationRepo)
 	speakerHandler := handlers.NewSpeakerHandler(speakerRepo)
 	sessionHandler := handlers.NewSessionHandler(sessionRepo)
@@ -143,6 +143,7 @@ func main() {
 	shopHandler := handlers.NewShopHandler(shopService)
 	walletHandler := handlers.NewWalletHandler(walletClient, transactionClient)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
+	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardRepo)
 
 	r := gin.New()
 
@@ -228,7 +229,6 @@ func main() {
 		api.POST("/shops/checkout/confirm", shopHandler.ConfirmCheckout)
 
 		api.GET("/wallets/balances/me", walletHandler.Balance)
-
 		api.GET("/ai-maintenance-status", aiAgentHandler.MaintenanceStatus)
 		api.GET("/users/me/matches", aiAgentHandler.Matches)
 		api.GET("/o2bar/recommendations", aiAgentHandler.O2BarRecommendationsGet)
@@ -236,6 +236,10 @@ func main() {
 		api.POST("/users/profile", aiAgentHandler.PersonalizedProfile)
 		api.GET("/agenda/recommendations", aiAgentHandler.AgendaRecommendations)
 		api.POST("/assistant/chat", aiAgentHandler.Chat)
+		// Leaderboard route
+		api.GET("/leaderboard", leaderboardHandler.GetLeaderboard)
+		api.GET("/leaderboard/preferences", leaderboardHandler.GetPreferences)
+		api.PUT("/leaderboard/preferences", leaderboardHandler.UpdatePreferences)
 	}
 
 	srv := &http.Server{
