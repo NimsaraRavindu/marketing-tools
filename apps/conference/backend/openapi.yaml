@@ -240,6 +240,30 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/PickedForYouSession" }
 
+  /activities:
+    get:
+      tags: [events]
+      summary: Non-session happenings on the General page
+      description: >
+        Registration desk hours, meals and parties -- everything the General
+        page shows that is not a session. Ordered by name then start time, so
+        occurrences that share a name (the client groups by name) arrive
+        chronologically. Always an array; empty until rows are seeded, since
+        this service has no write path for activities. Carries
+        ETag/Cache-Control validators.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ETag: { schema: { type: string } }
+            Cache-Control: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Activity" }
+        "304": { description: Not Modified }
+
   /app-configs:
     get:
       tags: [events]
@@ -359,6 +383,30 @@ components:
         sessions:
           type: array
           items: { $ref: "#/components/schemas/Session" }
+    Activity:
+      type: object
+      description: >-
+        One non-session happening. Several activities commonly share a name and
+        differ only by time; the client groups them by name itself.
+      required: [id, name, startTime, endTime]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, description: Omitted when the activity has nothing to say beyond its name and time. }
+        startTime: { type: string, format: date-time, description: ISO-8601 with venue offset }
+        endTime: { type: string, format: date-time }
+        location:
+          allOf: [{ $ref: "#/components/schemas/ActivityLocation" }]
+          description: >-
+            Omitted entirely when no location is recorded, rather than sent as
+            an object of empty strings.
+    ActivityLocation:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        address: { type: string }
+        floorPlanUrl: { type: string }
     Speaker:
       type: object
       description: >-
