@@ -36,6 +36,7 @@ tags:
   - name: attendees
   - name: connections
   - name: recommendations
+  - name: shop
 
 paths:
   /health:
@@ -256,6 +257,27 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/PickedForYouSession" }
 
+  /app-configs:
+    get:
+      tags: [events]
+      summary: Key/value app configuration
+      description: >
+        Includes the single documented cache-invalidation signal `cacheVersion`
+        (see .claude/PLAN.md Phase G). No write route exists in this service;
+        values are seeded via SQL.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    key: { type: string }
+                    value: { type: string }
+
   /activities:
     get:
       tags: [events]
@@ -279,26 +301,26 @@ paths:
                 items: { $ref: "#/components/schemas/Activity" }
         "304": { description: Not Modified }
 
-  /app-configs:
+  /wallets/balances/me:
     get:
-      tags: [events]
-      summary: Key/value app configuration
+      tags: [shop]
+      summary: The caller's wallet address and O2C balance
       description: >
-        Includes the single documented cache-invalidation signal `cacheVersion`
-        (see .claude/PLAN.md Phase G). No write route exists in this service;
-        values are seeded via SQL.
+        Pure pass-through over two external services, no database involvement.
+        The upstream balance arrives as a quoted decimal string and is emitted
+        here as a number.
       responses:
         "200":
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    key: { type: string }
-                    value: { type: string }
+                type: object
+                required: [walletAddress, balance]
+                properties:
+                  walletAddress: { type: string }
+                  balance: { type: number }
+        "404": { description: The caller has no wallet }
 
 components:
   securitySchemes:

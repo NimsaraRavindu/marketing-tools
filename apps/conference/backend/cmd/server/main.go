@@ -29,6 +29,7 @@ import (
 	"wso2-coin-backend/internal/clients/aiagent"
 	"wso2-coin-backend/internal/clients/notification"
 	"wso2-coin-backend/internal/clients/qrportal"
+	"wso2-coin-backend/internal/clients/transaction"
 	"wso2-coin-backend/internal/clients/wallet"
 	"wso2-coin-backend/internal/config"
 	"wso2-coin-backend/internal/db"
@@ -99,6 +100,7 @@ func main() {
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
+	transactionClient := transaction.NewClient(cfg.Transaction)
 	aiAgentClient := aiagent.NewClient(cfg.AIAgent)
 	notificationClient := notification.NewClient(cfg.Notification)
 
@@ -126,6 +128,7 @@ func main() {
 	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
 	notificationHandler := handlers.NewNotificationHandler(attendeeProfileRepo, notificationClient, cfg.AdminRoles)
 	activityHandler := handlers.NewActivityHandler(activityRepo)
+	walletHandler := handlers.NewWalletHandler(walletClient, transactionClient)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
 
 	r := gin.New()
@@ -202,6 +205,8 @@ func main() {
 		api.POST("/users/notifications", notificationHandler.Create)
 
 		api.GET("/app-configs", appConfigHandler.List)
+
+		api.GET("/wallets/balances/me", walletHandler.Balance)
 
 		api.GET("/ai-maintenance-status", aiAgentHandler.MaintenanceStatus)
 		api.GET("/users/me/matches", aiAgentHandler.Matches)

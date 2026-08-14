@@ -110,3 +110,80 @@ func TestTransferToken_ServerError(t *testing.T) {
 		t.Fatal("expected error for 500 response, got nil")
 	}
 }
+
+// The blockchain service reports the balance as a *quoted* decimal string.
+// Unmarshalling straight into a float64 would fail against the real service, so
+// this pins the string decode.
+func TestGetBalance_ParsesStringEncodedBalance(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"payload":{"balance":"123.4567"}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClientWithHTTPClient(srv.URL, srv.Client())
+	got, err := c.GetBalance(context.Background(), "0xWALLET")
+	if err != nil {
+		t.Fatalf("GetBalance returned error: %v", err)
+	}
+	if got != 123.4567 {
+		t.Errorf("balance = %v, want 123.4567", got)
+	}
+	if gotPath != "/api/v1/blockchain/get-balance/0xWALLET" {
+		t.Errorf("path = %q, want the address as a path segment", gotPath)
+	}
+}
+
+// A wallet that has never received a token is a normal state, not a broken
+// response.
+func TestGetBalance_EmptyBalanceIsZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"payload":{"balance":""}}`))
+	}))
+	defer srv.Close()
+
+	got, err := NewClientWithHTTPClient(srv.URL, srv.Client()).GetBalance(context.Background(), "0xW")
+	if err != nil {
+		t.Fatalf("GetBalance returned error: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("balance = %v, want 0", got)
+	}
+}
+
+func TestGetBalance_UnparseableBalanceIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"payload":{"balance":"not-a-number"}}`))
+	}))
+	defer srv.Close()
+
+	if _, err := NewClientWithHTTPClient(srv.URL, srv.Client()).GetBalance(context.Background(), "0xW"); err == nil {
+		t.Error("expected an error for an unparseable balance")
+	}
+}
+
+// Unlike the wallet service's primary-wallet lookup, a 404 here is a real fault:
+// the address was just resolved, so a miss must not be reported as zero coins.
+func TestGetBalance_NotFoundIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	if _, err := NewClientWithHTTPClient(srv.URL, srv.Client()).GetBalance(context.Background(), "0xW"); err == nil {
+		t.Error("expected an error for a 404 balance lookup")
+	}
+}
+
+func TestGetBalance_ServerErrorIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if _, err := NewClientWithHTTPClient(srv.URL, srv.Client()).GetBalance(context.Background(), "0xW"); err == nil {
+		t.Error("expected an error for a 500 balance lookup")
+	}
+}

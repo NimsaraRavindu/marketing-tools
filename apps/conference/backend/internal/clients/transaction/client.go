@@ -33,6 +33,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -61,6 +63,17 @@ type Client struct {
 type TransferRequest struct {
 	RecipientWalletAddress string  `json:"recipientWalletAddress"`
 	Amount                 float64 `json:"amount"`
+}
+
+// balanceResponse is the get-balance response envelope.
+//
+// Balance is a string, not a number: the blockchain service reports a formatted
+// token balance as a quoted JSON value. Decoding it into a float64 would fail
+// against the real service, so it is parsed explicitly instead.
+type balanceResponse struct {
+	Payload struct {
+		Balance string `json:"balance"`
+	} `json:"payload"`
 }
 
 // NewClient builds a production Client that authenticates to the
@@ -130,4 +143,53 @@ func (c *Client) TransferToken(ctx context.Context, recipientWalletAddress strin
 	}
 
 	return nil
+}
+
+// GetBalance calls GET {baseURL}/api/v1/blockchain/get-balance/{address} and
+// returns the wallet's token balance.
+//
+// Any non-2xx response is an error, including 404: unlike the wallet service's
+// primary-wallet lookup, where 404 legitimately means "this user has no wallet",
+// a balance lookup for an address that was just resolved should always succeed,
+// so a miss is a real fault rather than an empty balance. Reporting zero would
+// tell the user they have no coins.
+func (c *Client) GetBalance(ctx context.Context, address string) (float64, error) {
+	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-balance", address)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: building URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: building request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: request to %s failed: %w", reqURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
+		return 0, fmt.Errorf("transaction: GET %s returned status %d: %s", reqURL, resp.StatusCode, body)
+	}
+
+	var decoded balanceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return 0, fmt.Errorf("transaction: decoding response body: %w", err)
+	}
+
+	// An absent or empty balance is zero rather than a parse failure: a wallet
+	// that has never received a token is a normal state, not a broken response.
+	if strings.TrimSpace(decoded.Payload.Balance) == "" {
+		return 0, nil
+	}
+
+	balance, err := strconv.ParseFloat(strings.TrimSpace(decoded.Payload.Balance), 64)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: parsing balance %q: %w", decoded.Payload.Balance, err)
+	}
+	return balance, nil
 }

@@ -78,6 +78,16 @@ type Wallet struct {
 	WalletAddress string `json:"walletAddress"`
 }
 
+// WalletBalance is the GET /wallets/balances/me response.
+//
+// Balance is a JSON number even though the upstream blockchain service reports
+// it as a quoted string, matching both the legacy service's response type and
+// the client, which does arithmetic on it directly.
+type WalletBalance struct {
+	WalletAddress string  `json:"walletAddress"`
+	Balance       float64 `json:"balance"`
+}
+
 // CoinAllocation represents a row in the coin_allocation DB table
 type CoinAllocation struct {
 	ID                string            `json:"id"`
