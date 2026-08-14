@@ -19,6 +19,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -34,6 +35,7 @@ type EventRepo struct {
 	slotMinutes int
 	loc         *time.Location
 	venueTZ     string
+	caps        schemaCaps
 }
 
 // NewEventRepo constructs an EventRepo backed by the given pool. slotMinutes
@@ -124,21 +126,27 @@ func (r *EventRepo) GetEventAgendas(ctx context.Context, eventID string) ([]mode
 		}
 	}
 
+	topicExpr, topicJoin := r.caps.topicSQL(ctx, r.pool)
+
 	rows, err := r.pool.Query(ctx,
-		`SELECT d.id, d.date, d.label, d.start_minute, cc.timezone,
-		        s.id, s.kind, s.title, s.description, s.category,
-		        s.track_id, s.room_id, s.slot_index, s.duration_slots,
-		        s.article_url, s.article_label, s.video_url, s.video_label,
-		        t.color, r.name, rc.color, sec.label
-		 FROM conference_days d
-		 JOIN conference_config cc ON cc.id = d.config_id
-		 LEFT JOIN sessions s ON s.day_id = d.id
-		 LEFT JOIN tracks t ON t.id = s.track_id
-		 LEFT JOIN rooms r ON r.id = s.room_id
-		 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
-		 LEFT JOIN track_sections sec ON sec.id = s.section_id
-		 WHERE d.config_id = $1
-		 ORDER BY d.day_index, s.slot_index`,
+		fmt.Sprintf(
+			`SELECT d.id, d.date, d.label, d.start_minute, cc.timezone,
+			        s.id, s.kind, s.title, s.description, %s,
+			        s.track_id, s.room_id, s.slot_index, s.duration_slots,
+			        s.article_url, s.article_label, s.video_url, s.video_label,
+			        t.color, r.name, rc.color, sec.label
+			 FROM conference_days d
+			 JOIN conference_config cc ON cc.id = d.config_id
+			 LEFT JOIN sessions s ON s.day_id = d.id
+			 LEFT JOIN tracks t ON t.id = s.track_id
+			 LEFT JOIN rooms r ON r.id = s.room_id
+			 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
+			 LEFT JOIN track_sections sec ON sec.id = s.section_id
+			 %s
+			 WHERE d.config_id = $1
+			 ORDER BY d.day_index, s.slot_index`,
+			topicExpr, topicJoin,
+		),
 		configID,
 	)
 	if err != nil {

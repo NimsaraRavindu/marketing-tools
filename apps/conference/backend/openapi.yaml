@@ -297,10 +297,16 @@ components:
       required: [id, kind, title, durationSlots]
       properties:
         id: { type: string, format: uuid }
-        kind: { type: string, description: "keynote | session | break" }
+        kind: { type: string, description: "keynote | session | break | activity" }
         title: { type: string }
         description: { type: string }
-        category: { type: string }
+        category:
+          type: string
+          description: >
+            The session's topic label, resolved from track_topics via
+            sessions.topic_id (upstream migration 023). Replaces the dropped
+            sessions.category column; the key name is unchanged. Omitted against a
+            database older than upstream 023.
         startTime: { type: string, format: date-time, description: ISO-8601 with venue offset }
         endTime: { type: string, format: date-time }
         dayId: { type: string, format: uuid }

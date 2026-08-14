@@ -387,7 +387,8 @@ func TestSessionRepo_GetSession_ResolvesTrackColorAndRoomName(t *testing.T) {
 
 	var roomID string
 	if err := testDB.QueryRow(ctx,
-		"INSERT INTO rooms (config_id, name, capacity) VALUES ($1, 'Blue Hall', 100) RETURNING id",
+		// No capacity column: upstream migration 022 dropped rooms.capacity.
+		"INSERT INTO rooms (config_id, name) VALUES ($1, 'Blue Hall') RETURNING id",
 		fixture.configID,
 	).Scan(&roomID); err != nil {
 		t.Fatalf("failed to insert room: %v", err)
