@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"wso2-coin-backend/internal/config"
@@ -252,5 +253,55 @@ func TestGetTransactionDetails_UpstreamErrorIsAnError(t *testing.T) {
 		GetTransactionDetails(context.Background(), "0xHASH")
 	if err == nil {
 		t.Error("expected an error for a 502 response")
+	}
+}
+
+// The hash lands in the request path and this request carries the backend's own
+// client-credentials token, so the transport must not let a caller steer it off
+// the configured base path -- regardless of whether the caller validated first.
+func TestGetTransactionDetails_HashCannotEscapeTheBasePath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"payload":{"found":false}}`))
+	}))
+	defer srv.Close()
+
+	const wantPrefix = "/api/v1/blockchain/get-transaction-details/"
+
+	for _, hash := range []string{
+		"../../../../admin/internal",
+		"foo/../../bar",
+		"..%2Fadmin",
+	} {
+		t.Run(hash, func(t *testing.T) {
+			gotPath = ""
+			_, err := NewClientWithHTTPClient(srv.URL, srv.Client()).
+				GetTransactionDetails(context.Background(), hash)
+			// Either refusing outright or escaping is acceptable; silently
+			// issuing a request to a climbed-out path is not.
+			if err != nil {
+				return
+			}
+			if !strings.HasPrefix(gotPath, wantPrefix) {
+				t.Errorf("request path = %q, want it to stay under %q", gotPath, wantPrefix)
+			}
+		})
+	}
+}
+
+// A segment of only dots survives url.PathEscape untouched, so escaping alone
+// would still traverse. This is the case the explicit reject exists for.
+func TestGetTransactionDetails_DotSegmentIsRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no request should have been sent, got %q", r.URL.Path)
+	}))
+	defer srv.Close()
+
+	for _, hash := range []string{"", ".", "..", "..."} {
+		if _, err := NewClientWithHTTPClient(srv.URL, srv.Client()).
+			GetTransactionDetails(context.Background(), hash); err == nil {
+			t.Errorf("GetTransactionDetails(%q) returned no error, want a refusal", hash)
+		}
 	}
 }

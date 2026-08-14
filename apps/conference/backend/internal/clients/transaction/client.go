@@ -178,8 +178,13 @@ func (c *Client) TransferToken(ctx context.Context, recipientWalletAddress strin
 // a balance lookup for an address that was just resolved should always succeed,
 // so a miss is a real fault rather than an empty balance. Reporting zero would
 // tell the user they have no coins.
+// The address is escaped for the same reason the hash is in
+// GetTransactionDetails, though it is not caller-supplied today -- it is
+// resolved server-side from the wallet service. Escaping both keeps the rule
+// "no raw value becomes a path segment" true of this file rather than true of
+// whichever call someone last audited.
 func (c *Client) GetBalance(ctx context.Context, address string) (float64, error) {
-	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-balance", address)
+	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-balance", url.PathEscape(address))
 	if err != nil {
 		return 0, fmt.Errorf("transaction: building URL: %w", err)
 	}
@@ -227,8 +232,24 @@ func (c *Client) GetBalance(ctx context.Context, address string) (float64, error
 // policy decisions (right recipient, right amount, actually succeeded) live in
 // the service layer, so they are testable without an HTTP server and so this
 // client stays a transport.
+//
+// txHash is neutralised before it becomes a path segment. Callers are expected
+// to have validated it already (CheckoutConfirmRequest.Validate does), but
+// url.JoinPath resolves "." and ".." rather than treating them as literals, so a
+// raw caller-supplied segment can climb out of baseURL's path and aim this
+// request -- which carries the client-credentials token -- somewhere it was
+// never meant to go. Doing it here means the transport is safe on its own terms
+// rather than depending on every future caller remembering to check.
+//
+// Escaping alone is not sufficient: PathEscape encodes a "/" but leaves dots
+// untouched, so a segment of only dots still traverses. Hence both -- the
+// all-dots reject, and the escape for everything else.
 func (c *Client) GetTransactionDetails(ctx context.Context, txHash string) (TransactionDetails, error) {
-	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-transaction-details", txHash)
+	if txHash == "" || strings.Trim(txHash, ".") == "" {
+		return TransactionDetails{}, fmt.Errorf("transaction: refusing %q as a path segment", txHash)
+	}
+
+	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-transaction-details", url.PathEscape(txHash))
 	if err != nil {
 		return TransactionDetails{}, fmt.Errorf("transaction: building URL: %w", err)
 	}

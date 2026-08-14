@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"wso2-coin-backend/internal/clients/transaction"
 	"wso2-coin-backend/internal/models"
@@ -46,6 +47,18 @@ var (
 // Order ids are printed on receipts and quoted to support, so the format is part
 // of the contract, not an implementation detail.
 const orderIDPrefix = "ORD-"
+
+// verifyTimeout bounds the on-chain verification call.
+//
+// ConfirmOrder runs this inside an open database transaction, holding the
+// order's FOR UPDATE lock and a pooled connection for its whole duration -- the
+// lock has to span verify-then-update or two concurrent confirms could both
+// settle. The pool is shared by the entire backend and is not large, so an
+// unbounded call here couples the availability of every other endpoint to the
+// transaction service's worst latency. This caps that exposure well under the
+// client's own 15s transport timeout: a confirm that cannot be verified quickly
+// is better failed and retried than left holding a connection.
+const verifyTimeout = 5 * time.Second
 
 // TransactionDetailsClient fetches a blockchain transaction for verification.
 // Satisfied by *transaction.Client.
@@ -208,6 +221,11 @@ func (s *ShopService) ConfirmCheckout(ctx context.Context, userUUID, email strin
 	}
 
 	verify := func(ctx context.Context, expectedTotal float64) error {
+		// Bounded because this runs inside ConfirmOrder's transaction, holding a
+		// pooled connection and the order's row lock -- see verifyTimeout.
+		ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+		defer cancel()
+
 		details, err := s.transaction.GetTransactionDetails(ctx, req.TransactionHash)
 		if err != nil {
 			return fmt.Errorf("service: fetching transaction details: %w", err)

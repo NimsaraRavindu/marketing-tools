@@ -297,6 +297,30 @@ type CheckoutConfirmRequest struct {
 // arbitrary blob reach the UNIQUE index on shop_order.transaction_hash.
 const maxTxHashLen = 128
 
+// isHashSafe reports whether s is alphanumeric, which every hash encoding this
+// might carry (hex, with or without an 0x prefix, or base58) already is.
+//
+// A length bound alone is not enough. This value is interpolated into the path
+// of an outbound request to the transaction service, and url.JoinPath applies
+// path cleaning, so a ".." segment does not 404 -- it climbs out of the
+// configured base path. Since that request carries this backend's own OAuth2
+// client-credentials token, an unconstrained hash would let any authenticated
+// attendee aim a privileged GET at an arbitrary path on an internal service.
+// Rejecting the separators here removes the traversal rather than escaping it,
+// and keeps the check at the boundary where the value first arrives.
+func isHashSafe(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Validate checks a confirm request, trimming both fields in place.
 func (r *CheckoutConfirmRequest) Validate() error {
 	r.OrderID = strings.TrimSpace(r.OrderID)
@@ -313,6 +337,9 @@ func (r *CheckoutConfirmRequest) Validate() error {
 	}
 	if len(r.TransactionHash) > maxTxHashLen {
 		return errors.New("transactionHash is too long")
+	}
+	if !isHashSafe(r.TransactionHash) {
+		return errors.New("transactionHash must be alphanumeric")
 	}
 	return nil
 }

@@ -150,6 +150,22 @@ func TestCheckoutConfirmRequest_Validate(t *testing.T) {
 			CheckoutConfirmRequest{OrderID: "ORD-1", TransactionHash: strings.Repeat("a", 129)},
 			true,
 		},
+		// The hash becomes a path segment on an outbound request that carries
+		// this backend's own credentials, and url.JoinPath resolves "..", so a
+		// length check alone would let a caller redirect that request.
+		{
+			"hash traversing out of the base path",
+			CheckoutConfirmRequest{OrderID: "ORD-1", TransactionHash: "../../../../admin/internal"},
+			true,
+		},
+		{"dot segment hash", CheckoutConfirmRequest{OrderID: "ORD-1", TransactionHash: ".."}, true},
+		{"hash with a slash", CheckoutConfirmRequest{OrderID: "ORD-1", TransactionHash: "abc/def"}, true},
+		{"percent encoded hash", CheckoutConfirmRequest{OrderID: "ORD-1", TransactionHash: "..%2Fadmin"}, true},
+		{
+			"realistic full length hash still accepted",
+			CheckoutConfirmRequest{OrderID: "ORD-1", TransactionHash: "0x" + strings.Repeat("aF9", 21) + "b"},
+			false,
+		},
 	}
 
 	for _, tc := range cases {
