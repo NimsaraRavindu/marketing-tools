@@ -107,8 +107,7 @@ paths:
       description: >
         The current conference (the one with the latest start_date), as a single
         object rather than an array. Clients read `id` from this and pin later
-        requests to it. Declared before /events/{eventId}/agendas so the static
-        segment resolves ahead of the wildcard.
+        requests to it.
       responses:
         "200":
           description: OK

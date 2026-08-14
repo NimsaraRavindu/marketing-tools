@@ -84,9 +84,11 @@ func (h *EventHandler) List(c *gin.Context) {
 // request to it, so it must be one object: an array would leave the client
 // reading `.id` off undefined. 404 when no conference exists at all.
 //
-// Registered before GET /events/:eventId/agendas in main.go; gin resolves the
-// static segment ahead of the wildcard, the same way /sessions/current and
-// /sessions/:id already coexist.
+// This route cannot collide with GET /events/:eventId/agendas whatever the
+// registration order: that path is three segments and this one is two. The
+// static-beats-wildcard rule gin applies is what would matter for a same-depth
+// pair -- /sessions/current against /sessions/:id -- and it is that rule, not
+// ordering, that a future bare /events/:eventId would rely on.
 func (h *EventHandler) Current(c *gin.Context) {
 	event, err := h.reader.GetCurrentEvent(c.Request.Context())
 	if err != nil {
