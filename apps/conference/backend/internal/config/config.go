@@ -31,6 +31,9 @@ type OAuthClientConfig struct {
 	TokenURL     string
 	ClientID     string
 	ClientSecret string
+	// Scopes is optional and left empty by every integration except the
+	// notification service, whose IdP client requires them explicitly.
+	Scopes []string
 }
 
 // ExternalServiceConfig holds the base endpoint and OAuth2 credentials for an
@@ -122,6 +125,10 @@ type Config struct {
 	QRPortal    ExternalServiceConfig
 	Wallet      ExternalServiceConfig
 	Transaction ExternalServiceConfig
+	// Notification is the external WSO2 notification service that fans a
+	// broadcast out to attendees' devices. This backend never talks to FCM
+	// itself -- it hands the recipient list to that service and stops there.
+	Notification ExternalServiceConfig
 
 	// AI Features
 	AIAgent         AIAgentConfig
@@ -238,6 +245,15 @@ func Load() Config {
 				TokenURL:     os.Getenv("TRANSACTION_TOKEN_URL"),
 				ClientID:     os.Getenv("TRANSACTION_CLIENT_ID"),
 				ClientSecret: os.Getenv("TRANSACTION_CLIENT_SECRET"),
+			},
+		},
+		Notification: ExternalServiceConfig{
+			Endpoint: os.Getenv("NOTIFICATION_ENDPOINT"),
+			OAuth: OAuthClientConfig{
+				TokenURL:     os.Getenv("NOTIFICATION_TOKEN_URL"),
+				ClientID:     os.Getenv("NOTIFICATION_CLIENT_ID"),
+				ClientSecret: os.Getenv("NOTIFICATION_CLIENT_SECRET"),
+				Scopes:       parseList(os.Getenv("NOTIFICATION_SCOPES")),
 			},
 		},
 

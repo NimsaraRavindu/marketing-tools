@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"wso2-coin-backend/internal/clients/aiagent"
+	"wso2-coin-backend/internal/clients/notification"
 	"wso2-coin-backend/internal/clients/qrportal"
 	"wso2-coin-backend/internal/clients/wallet"
 	"wso2-coin-backend/internal/config"
@@ -99,6 +100,7 @@ func main() {
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
 	aiAgentClient := aiagent.NewClient(cfg.AIAgent)
+	notificationClient := notification.NewClient(cfg.Notification)
 
 	coinService := service.NewCoinService(
 		attendeeRepo,
@@ -122,6 +124,7 @@ func main() {
 	favoritesHandler := handlers.NewFavoritesHandler(favoritesRepo)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackRepo, eventRepo)
 	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
+	notificationHandler := handlers.NewNotificationHandler(attendeeProfileRepo, notificationClient, cfg.AdminRoles)
 	activityHandler := handlers.NewActivityHandler(activityRepo)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
 
@@ -190,6 +193,9 @@ func main() {
 		api.DELETE("/users/me/favorites/:sessionId", favoritesHandler.Remove)
 
 		api.POST("/feedback", feedbackHandler.Create)
+
+		// Admin-gated broadcast: restricted to RBAC_ADMIN_ROLES groups.
+		api.POST("/users/notifications", notificationHandler.Create)
 
 		api.GET("/app-configs", appConfigHandler.List)
 
