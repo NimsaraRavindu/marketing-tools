@@ -322,6 +322,100 @@ paths:
                   balance: { type: number }
         "404": { description: The caller has no wallet }
 
+  /shops/items:
+    get:
+      tags: [shop]
+      summary: The purchasable catalog for the current event
+      description: >
+        An envelope, not a bare array: the client needs to know whether the shop
+        is open and which event the catalog belongs to, and neither is derivable
+        from the item list. Only VISIBLE items are returned, so a hidden item is
+        unbuyable rather than merely undisplayed. Items are still returned when
+        the shop is closed, so past orders' lines can be resolved.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShopCatalog" }
+        "304": { description: Not Modified }
+
+  /shops/orders/me:
+    get:
+      tags: [shop]
+      summary: The caller's own order history, newest first
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ShopOrder" }
+
+  /shops/checkout:
+    post:
+      tags: [shop]
+      summary: Create a PENDING order and reserve its stock
+      description: >
+        The order row, its lines, and one conditional stock decrement per line are
+        a single transaction: a shortfall on any line rolls the whole basket back.
+        `totalCost` and `eventId` are accepted and ignored -- the total is
+        recomputed from live prices and the event is resolved server-side. A
+        replayed `idempotencyKey` returns the original order without a second
+        write.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckoutRequest" }
+      responses:
+        "200":
+          description: Order created (or an idempotent replay of one)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutResponse" }
+        "400":
+          description: >
+            Validation failure, or a stock/availability/per-user-limit rejection.
+            Stock and limit rejections carry `itemId` and `availableQuantity` so
+            the client can repair the offending cart line; an unavailable item
+            carries `itemId` only, since it is not purchasable at any quantity.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutStockError" }
+        "409": { description: The shop is closed }
+
+  /shops/checkout/confirm:
+    post:
+      tags: [shop]
+      summary: Verify an order's on-chain payment and confirm it
+      description: >
+        The order is locked FOR UPDATE and re-read, and verification runs while
+        that lock is held, so two concurrent confirms cannot both settle. The
+        payment must be a `transfer` to the configured master wallet for exactly
+        the order's stored total, and must have succeeded. Every verification
+        failure returns the same opaque message; the reason is logged only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, transactionHash]
+              properties:
+                orderId: { type: string }
+                transactionHash: { type: string }
+      responses:
+        "200":
+          description: Order confirmed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutResponse" }
+        "400": { description: Unknown order, reused transaction hash, or failed verification }
+        "403": { description: The order belongs to another user }
+        "409": { description: The order has already been processed }
+
 components:
   securitySchemes:
     jwtAssertion:
@@ -544,3 +638,112 @@ components:
             name: { type: string }
             address: { type: string }
             floorPlanUrl: { type: string }
+    ShopItem:
+      type: object
+      required: [id, name, description, price, imageUrl, availableStock, category, visibility]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        price: { type: number, description: In O2C, stored as DECIMAL(10,4). }
+        imageUrl: { type: string }
+        availableStock: { type: integer }
+        maxPerUser:
+          type: integer
+          description: >
+            Omitted when the item has no per-attendee cap. Enforced server-side at
+            checkout against the caller's non-FAILED, non-EXPIRED orders.
+        category: { type: string }
+        visibility: { type: string, enum: [VISIBLE, HIDDEN, DELETED] }
+    ShopCatalog:
+      type: object
+      required: [items, isShopOpen, activeEventId]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ShopItem" } }
+        isShopOpen:
+          type: boolean
+          description: False once conference_config.shop_closing_time has passed. A NULL closing time never closes.
+        activeEventId: { type: string, format: uuid }
+    ShopOrderLine:
+      type: object
+      description: >
+        Item identity and unit price are each emitted under two names because the
+        client reads `itemId || id` and `priceAtPurchase || price`. Both price
+        fields carry the unit_price frozen at checkout, never the current price.
+      required: [itemId, id, name, quantity, price, priceAtPurchase]
+      properties:
+        itemId: { type: string }
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        imageUrl: { type: string }
+        category: { type: string }
+        quantity: { type: integer }
+        price: { type: number }
+        priceAtPurchase: { type: number }
+    ShopOrder:
+      type: object
+      required: [orderId, status, items, total, date]
+      properties:
+        orderId: { type: string, description: "\"ORD-\" + a UUIDv4, generated server-side." }
+        eventId: { type: string, format: uuid }
+        status: { type: string, enum: [PENDING, CONFIRMED, FULFILLED, EXPIRED, FAILED] }
+        items: { type: array, items: { $ref: "#/components/schemas/ShopOrderLine" } }
+        total: { type: number }
+        date: { type: string, format: date-time }
+        txHash: { type: string }
+        shippingRecipientName: { type: string }
+        shippingEmail: { type: string }
+        shippingAddressLine1: { type: string }
+        shippingAddressLine2: { type: string }
+        shippingCity: { type: string }
+        shippingState: { type: string }
+        shippingPostalCode: { type: string }
+        shippingCountry: { type: string }
+    CheckoutRequest:
+      type: object
+      required: [items, shippingRecipientName, shippingEmail, shippingAddressLine1, shippingCity, shippingCountry]
+      properties:
+        idempotencyKey:
+          type: string
+          description: Replaying one returns the original order rather than creating a second.
+        eventId: { type: string, description: Accepted and ignored; the event is resolved server-side. }
+        totalCost: { type: number, description: Accepted and ignored; the total is recomputed from live prices. }
+        items:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [id, quantity]
+            properties:
+              id: { type: string }
+              quantity: { type: integer, minimum: 1, maximum: 1000 }
+        shippingRecipientName: { type: string, maxLength: 255 }
+        shippingEmail: { type: string, maxLength: 255 }
+        shippingAddressLine1: { type: string, maxLength: 255 }
+        shippingAddressLine2: { type: string, maxLength: 255 }
+        shippingCity: { type: string, maxLength: 255 }
+        shippingState: { type: string, maxLength: 255 }
+        shippingPostalCode: { type: string, maxLength: 255 }
+        shippingCountry: { type: string, maxLength: 255 }
+    CheckoutResponse:
+      type: object
+      required: [orderId, transactionHash]
+      properties:
+        orderId: { type: string }
+        transactionHash:
+          type: string
+          nullable: true
+          description: An explicit null from checkout; populated by confirm.
+    CheckoutStockError:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+        itemId: { type: string, description: The offending cart line, when one item is at fault. }
+        availableQuantity:
+          type: integer
+          description: >
+            How many the caller may still buy -- remaining stock, or remaining
+            per-user allowance. Absent when the item is not purchasable at all, so
+            the client does not mistake it for a sold-out line.

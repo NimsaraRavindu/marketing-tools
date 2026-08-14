@@ -130,6 +130,17 @@ type Config struct {
 	// itself -- it hands the recipient list to that service and stops there.
 	Notification ExternalServiceConfig
 
+	// ShopMasterWalletAddress is the merchant wallet that shop payments must be
+	// sent to (SHOP_MASTER_WALLET_ADDRESS). Checkout confirmation compares the
+	// on-chain transfer's decoded recipient against it, which is what stops a
+	// caller settling an order by pointing at an unrelated transfer.
+	//
+	// Left empty, POST /shops/checkout/confirm refuses every request rather than
+	// skipping the recipient check -- a deployment that forgot to set this must
+	// not hand out merchandise for free. Validate() does not require it, so a
+	// deployment with no shop still starts.
+	ShopMasterWalletAddress string
+
 	// AI Features
 	AIAgent         AIAgentConfig
 	AIFeatureStatus AIFeatureStatus
@@ -256,6 +267,8 @@ func Load() Config {
 				Scopes:       parseList(os.Getenv("NOTIFICATION_SCOPES")),
 			},
 		},
+
+		ShopMasterWalletAddress: strings.TrimSpace(os.Getenv("SHOP_MASTER_WALLET_ADDRESS")),
 
 		AIAgent: AIAgentConfig{
 			MatchmakingServiceURL:      os.Getenv("AI_MATCHMAKING_SERVICE_URL"),
