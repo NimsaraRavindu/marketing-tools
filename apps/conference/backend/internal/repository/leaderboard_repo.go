@@ -77,6 +77,17 @@ func (r *LeaderboardRepo) GetLeaderboard(ctx context.Context, limit int) ([]mode
 		entry.FirstName, _ = r.decrypt(firstNameEnc)
 		entry.LastName, _ = r.decrypt(lastNameEnc)
 
+		if !entry.ShowFullName {
+			if len(entry.FirstName) > 0 {
+				runes := []rune(entry.FirstName)
+				entry.FirstName = string(runes[0]) + "***"
+			}
+			if len(entry.LastName) > 0 {
+				runes := []rune(entry.LastName)
+				entry.LastName = string(runes[0]) + "***"
+			}
+		}
+
 		entries = append(entries, entry)
 	}
 
