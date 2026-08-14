@@ -249,9 +249,13 @@ paths:
         migration 021), scoped to the current conference. Unscheduled activities
         are excluded, since start/end time is the whole point of the rendering.
         `location` is always absent: upstream models no per-activity location.
+        Carries ETag/Cache-Control validators.
       responses:
         "200":
           description: OK
+          headers:
+            ETag: { schema: { type: string } }
+            Cache-Control: { schema: { type: string } }
           content:
             application/json:
               schema:

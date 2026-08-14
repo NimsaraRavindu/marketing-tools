@@ -73,6 +73,15 @@ func NewActivityRepo(pool *pgxpool.Pool, slotMinutes int, loc *time.Location) *A
 // Ordered by name first because the client groups by name and its
 // reduce-into-a-map preserves receive order: without this, one sitting of a
 // recurring activity could list above an earlier one.
+//
+// kind is compared as text rather than against the bare literal. Upstream 021
+// added 'activity' to the kind vocabulary, and if that column is a Postgres enum
+// then naming a label the type does not yet carry is not an empty result but an
+// "invalid input value for enum" error -- this endpoint would 500 against every
+// database still below 021, which is exactly the failure schemaCaps exists to
+// avoid elsewhere. The cast costs an index scan on a table holding a handful of
+// rows per conference, and buys the same degrade-to-empty behaviour the rest of
+// this package has against an unknown upstream revision.
 func (r *ActivityRepo) List(ctx context.Context) ([]models.Activity, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT s.id, s.title, s.description,
@@ -81,8 +90,8 @@ func (r *ActivityRepo) List(ctx context.Context) ([]models.Activity, error) {
 		 FROM sessions s
 		 JOIN conference_days d ON d.id = s.day_id
 		 JOIN conference_config cc ON cc.id = s.config_id
-		 WHERE s.kind = 'activity'
-		   AND s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
+		 WHERE s.kind::text = 'activity'
+		   AND s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC, id DESC LIMIT 1)
 		   AND s.slot_index IS NOT NULL
 		 ORDER BY s.title, d.date, s.slot_index`,
 	)
