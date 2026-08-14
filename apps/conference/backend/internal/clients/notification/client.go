@@ -42,10 +42,10 @@ const (
 	// error message, so a huge/unexpected body doesn't blow up logs.
 	maxErrBodyBytes = 2048
 	// requestTimeout bounds both the OAuth2 token fetch and the send itself.
-	// Generous relative to the other clients: the request body carries every
-	// attendee uuid in one shot, so the service has real work to do before it
-	// answers.
-	requestTimeout = 60 * time.Second
+	// Deliberately under the server's 15s WriteTimeout (cmd/server/main.go):
+	// if this outlived it the caller would see a dropped connection while the
+	// send was still in flight, and a retry would double-broadcast.
+	requestTimeout = 10 * time.Second
 
 	// eventType and source are fixed strings the notification service routes
 	// on. Carried over verbatim from the old Ballerina payload -- changing

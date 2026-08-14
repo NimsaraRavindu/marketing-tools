@@ -16,7 +16,10 @@
 
 package models
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // Notification title/body length bounds, carried over from the old
 // Ballerina @constraint:String annotations on UserNotificationPayload. The
@@ -39,6 +42,10 @@ type UserNotificationRequest struct {
 // or an empty string when it is valid. Trimming here rather than in the
 // handler keeps "what counts as empty" in one place: a title of only spaces
 // is a missing title, not a 200-char-valid one.
+//
+// Lengths count runes, not bytes, matching the Ballerina constraint these
+// bounds came from -- otherwise a non-ASCII title (Sinhala, Tamil, an emoji)
+// would be rejected at a third of the advertised limit.
 func (r *UserNotificationRequest) Validate() string {
 	r.Title = strings.TrimSpace(r.Title)
 	r.Description = strings.TrimSpace(r.Description)
@@ -46,9 +53,9 @@ func (r *UserNotificationRequest) Validate() string {
 	switch {
 	case r.Title == "":
 		return "title is required"
-	case len(r.Title) > NotificationTitleMaxLen:
+	case utf8.RuneCountInString(r.Title) > NotificationTitleMaxLen:
 		return "title exceeds the maximum length"
-	case len(r.Description) > NotificationBodyMaxLen:
+	case utf8.RuneCountInString(r.Description) > NotificationBodyMaxLen:
 		return "description exceeds the maximum length"
 	default:
 		return ""
