@@ -25,18 +25,27 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"wso2-coin-backend/internal/models"
+	"wso2-coin-backend/internal/repository"
 )
 
 type fakeEventReader struct {
-	events      []models.Event
-	eventsErr   error
-	agendas     []models.EventAgenda
-	agendasErr  error
-	lastEventID string
+	events       []models.Event
+	eventsErr    error
+	current      models.Event
+	currentErr   error
+	agendas      []models.EventAgenda
+	agendasErr   error
+	lastEventID  string
+	currentCalls int
 }
 
 func (f *fakeEventReader) GetEvents(ctx context.Context) ([]models.Event, error) {
 	return f.events, f.eventsErr
+}
+
+func (f *fakeEventReader) GetCurrentEvent(ctx context.Context) (models.Event, error) {
+	f.currentCalls++
+	return f.current, f.currentErr
 }
 
 func (f *fakeEventReader) GetEventAgendas(ctx context.Context, eventID string) ([]models.EventAgenda, error) {
@@ -47,6 +56,9 @@ func (f *fakeEventReader) GetEventAgendas(ctx context.Context, eventID string) (
 func newEventTestRouter(h *EventHandler) *gin.Engine {
 	r := gin.New()
 	r.GET("/events", h.List)
+	// Registered in the same order as main.go so these tests exercise the real
+	// static-before-wildcard resolution rather than a simplified table.
+	r.GET("/events/current", h.Current)
 	r.GET("/events/:eventId/agendas", h.Agendas)
 	r.GET("/event-agendas", h.LegacyAgendas)
 	return r
@@ -245,5 +257,75 @@ func TestEventHandler_LegacyAgendas_RepositoryErrorReturns500(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+// The client reads `event.id` off this and pins every later request to it, so it
+// must be a single object -- an array would leave it reading .id off undefined.
+func TestEventHandler_Current_ReturnsSingleObject(t *testing.T) {
+	reader := &fakeEventReader{current: models.Event{
+		ID: "event-1", Name: "WSO2Con Africa", IsCurrent: true, Timezone: "Africa/Nairobi",
+	}}
+	rec := doRequest(newEventTestRouter(NewEventHandler(reader)), http.MethodGet, "/events/current", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got models.Event
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not a single event object: %v (%s)", err, rec.Body.String())
+	}
+	if got.ID != "event-1" {
+		t.Errorf("id = %q, want event-1", got.ID)
+	}
+	if !got.IsCurrent {
+		t.Error("isCurrent = false, want true")
+	}
+	if got.Timezone != "Africa/Nairobi" {
+		t.Errorf("timezone = %q, want Africa/Nairobi", got.Timezone)
+	}
+}
+
+func TestEventHandler_Current_NoEventIs404(t *testing.T) {
+	reader := &fakeEventReader{currentErr: repository.ErrNotFound}
+	rec := doRequest(newEventTestRouter(NewEventHandler(reader)), http.MethodGet, "/events/current", nil)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEventHandler_Current_RepoErrorIs500(t *testing.T) {
+	reader := &fakeEventReader{currentErr: errBoom}
+	rec := doRequest(newEventTestRouter(NewEventHandler(reader)), http.MethodGet, "/events/current", nil)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// /events/current must not be swallowed by the /events/:eventId/agendas wildcard
+// registered alongside it. Registering both is what this asserts is safe.
+func TestEventHandler_Current_DoesNotCollideWithEventIDWildcard(t *testing.T) {
+	reader := &fakeEventReader{
+		current: models.Event{ID: "event-1"},
+		agendas: []models.EventAgenda{{ID: "day-1"}},
+	}
+	r := newEventTestRouter(NewEventHandler(reader))
+
+	if rec := doRequest(r, http.MethodGet, "/events/current", nil); rec.Code != http.StatusOK {
+		t.Fatalf("/events/current returned %d", rec.Code)
+	}
+	if reader.currentCalls != 1 {
+		t.Errorf("GetCurrentEvent called %d times, want 1", reader.currentCalls)
+	}
+
+	// The wildcard route still works, and still receives the literal id.
+	if rec := doRequest(r, http.MethodGet, "/events/abc-123/agendas", nil); rec.Code != http.StatusOK {
+		t.Fatalf("/events/abc-123/agendas returned %d", rec.Code)
+	}
+	if reader.lastEventID != "abc-123" {
+		t.Errorf("agendas got eventId %q, want abc-123", reader.lastEventID)
 	}
 }

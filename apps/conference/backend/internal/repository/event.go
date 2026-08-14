@@ -98,6 +98,49 @@ func (r *EventRepo) GetEvents(ctx context.Context) ([]models.Event, error) {
 	return events, nil
 }
 
+// GetCurrentEvent returns the single "current" conference -- the
+// conference_config with the latest start_date, the same rule GetEvents uses to
+// set IsCurrent and GetEventAgendas uses to resolve the literal "current".
+// IsCurrent is therefore always true on the returned row.
+//
+// Returns ErrNotFound when no conference_config row exists at all, which the
+// handler maps to 404: the client (useCurrentEvent) reads `event.id` to pin
+// every later request to an event, so an empty object would be worse than an
+// explicit miss.
+func (r *EventRepo) GetCurrentEvent(ctx context.Context) (models.Event, error) {
+	var e models.Event
+	var tz string
+	var venueName, venueAddress *string
+
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, name, timezone, venue_name, venue_address
+		 FROM conference_config
+		 ORDER BY start_date DESC
+		 LIMIT 1`,
+	).Scan(&e.ID, &e.Name, &tz, &venueName, &venueAddress)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.Event{}, ErrNotFound
+		}
+		return models.Event{}, err
+	}
+
+	e.IsCurrent = true
+	// conference_config.timezone is the source of truth; the env-configured
+	// venueTZ is only a fallback for an empty value.
+	e.Timezone = tz
+	if e.Timezone == "" {
+		e.Timezone = r.venueTZ
+	}
+	if venueName != nil {
+		e.VenueName = *venueName
+	}
+	if venueAddress != nil {
+		e.VenueAddress = *venueAddress
+	}
+	return e, nil
+}
+
 // GetEventAgendas returns every conference_days row for the given eventID,
 // ordered by day_index, each with its scheduled sessions grouped in (ordered
 // by slot_index). A day with zero sessions still appears, with an empty (not
