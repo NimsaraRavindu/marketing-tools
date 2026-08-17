@@ -45,7 +45,7 @@ paths:
       summary: Liveness/readiness probe (unauthenticated)
       security: []
       responses:
-        "200": { description: OK }
+        "200": { description: "OK" }
 
   /sessions/current:
     get:
@@ -58,7 +58,7 @@ paths:
         ETag/Cache-Control validators.
       responses:
         "200":
-          description: OK
+          description: "OK"
           headers:
             ETag: { schema: { type: string } }
             Cache-Control: { schema: { type: string } }
@@ -67,7 +67,7 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Session" }
-        "304": { description: Not Modified }
+        "304": { description: "Not Modified" }
 
   /sessions/{id}:
     get:
@@ -76,12 +76,12 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
-        "304": { description: Not Modified }
-        "404": { description: No such session }
+        "304": { description: "Not Modified" }
+        "404": { description: "No such session" }
 
   /events:
     get:
@@ -91,16 +91,16 @@ paths:
           in: query
           required: false
           schema: { type: boolean }
-          description: When `true`, returns only non-current events (history modal).
+          description: "When `true`, returns only non-current events (history modal)."
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Event" }
-        "304": { description: Not Modified }
+        "304": { description: "Not Modified" }
 
   /events/current:
     get:
@@ -111,12 +111,12 @@ paths:
         requests to it.
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Event" }
-        "304": { description: Not Modified }
-        "404": { description: No conference is configured }
+        "304": { description: "Not Modified" }
+        "404": { description: "No conference is configured" }
 
   /events/{eventId}/agendas:
     get:
@@ -126,33 +126,33 @@ paths:
           in: path
           required: true
           schema: { type: string }
-          description: A conference_config id, or the literal `current`.
+          description: "A conference_config id, or the literal `current`."
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/EventAgenda" }
-        "304": { description: Not Modified }
+        "304": { description: "Not Modified" }
 
   /event-agendas:
     get:
       tags: [events]
-      description: Query-param variant of the agenda resource.
+      description: "Query-param variant of the agenda resource."
       parameters:
         - { name: isCurrent, in: query, required: false, schema: { type: boolean } }
         - { name: eventId, in: query, required: false, schema: { type: string } }
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/EventAgenda" }
-        "400": { description: Neither eventId nor isCurrent=true supplied }
+        "400": { description: "Neither eventId nor isCurrent=true supplied" }
 
   /speakers:
     get:
@@ -162,21 +162,21 @@ paths:
           in: query
           required: false
           schema: { type: string }
-          description: Restrict to speakers with a session in this conference (and show only those sessions).
+          description: "Restrict to speakers with a session in this conference (and show only those sessions)."
         - name: q
           in: query
           required: false
           schema: { type: string }
-          description: Case-insensitive substring match on speaker name (matched server-side after decryption).
+          description: "Case-insensitive substring match on speaker name (matched server-side after decryption)."
       responses:
         "200":
-          description: OK, ordered by name
+          description: "OK, ordered by name"
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/SpeakerSummary" }
-        "304": { description: Not Modified }
+        "304": { description: "Not Modified" }
 
   /speakers/{id}:
     get:
@@ -185,11 +185,11 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Speaker" }
-        "404": { description: No such visible speaker }
+        "404": { description: "No such visible speaker" }
 
   /attendees/search:
     post:
@@ -201,24 +201,24 @@ paths:
             schema:
               type: object
               properties:
-                uuid: { type: string, description: Optional single-attendee lookup by idp uuid. }
-                query: { type: string, description: Case-insensitive substring over name/company/title (decrypted server-side). }
-                cursor: { type: string, description: Opaque nextCursor from a prior page. }
+                uuid: { type: string, description: "Optional single-attendee lookup by idp uuid." }
+                query: { type: string, description: "Case-insensitive substring over name/company/title (decrypted server-side)." }
+                cursor: { type: string, description: "Opaque nextCursor from a prior page." }
                 limit: { type: integer, default: 20, maximum: 100 }
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AttendeeSearchResult" }
-        "400": { description: Invalid cursor or negative limit }
+        "400": { description: "Invalid cursor or negative limit" }
 
   /users/me/connections:
     get:
       tags: [connections]
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UserConnectionsInfo" }
@@ -235,7 +235,7 @@ paths:
                 status: { type: integer, enum: [-1, 0, 1], description: "-1 rejected, 0 pending, 1 accepted" }
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ConnectionUserInfo" }
@@ -250,7 +250,7 @@ paths:
         longer intersects recommendation ids against the loaded agenda.
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema:
@@ -267,7 +267,7 @@ paths:
         values are seeded via SQL.
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema:
@@ -290,7 +290,7 @@ paths:
         Carries ETag/Cache-Control validators.
       responses:
         "200":
-          description: OK
+          description: "OK"
           headers:
             ETag: { schema: { type: string } }
             Cache-Control: { schema: { type: string } }
@@ -299,7 +299,7 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Activity" }
-        "304": { description: Not Modified }
+        "304": { description: "Not Modified" }
 
   /wallets/balances/me:
     get:
@@ -311,7 +311,7 @@ paths:
         here as a number.
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema:
@@ -320,7 +320,7 @@ paths:
                 properties:
                   walletAddress: { type: string }
                   balance: { type: number }
-        "404": { description: The caller has no wallet }
+        "404": { description: "The caller has no wallet" }
 
   /shops/items:
     get:
@@ -334,11 +334,11 @@ paths:
         the shop is closed, so past orders' lines can be resolved.
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ShopCatalog" }
-        "304": { description: Not Modified }
+        "304": { description: "Not Modified" }
 
   /shops/orders/me:
     get:
@@ -346,7 +346,7 @@ paths:
       summary: The caller's own order history, newest first
       responses:
         "200":
-          description: OK
+          description: "OK"
           content:
             application/json:
               schema:
@@ -371,7 +371,7 @@ paths:
             schema: { $ref: "#/components/schemas/CheckoutRequest" }
       responses:
         "200":
-          description: Order created (or an idempotent replay of one)
+          description: "Order created (or an idempotent replay of one)"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CheckoutResponse" }
@@ -384,7 +384,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CheckoutStockError" }
-        "409": { description: The shop is closed }
+        "409": { description: "The shop is closed" }
 
   /shops/checkout/confirm:
     post:
@@ -408,13 +408,13 @@ paths:
                 transactionHash: { type: string }
       responses:
         "200":
-          description: Order confirmed
+          description: "Order confirmed"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CheckoutResponse" }
-        "400": { description: Unknown order, reused transaction hash, or failed verification }
-        "403": { description: The order belongs to another user }
-        "409": { description: The order has already been processed }
+        "400": { description: "Unknown order, reused transaction hash, or failed verification" }
+        "403": { description: "The order belongs to another user" }
+        "409": { description: "The order has already been processed" }
 
 components:
   securitySchemes:
@@ -438,7 +438,7 @@ components:
             sessions.topic_id (upstream migration 023). Replaces the dropped
             sessions.category column; the key name is unchanged. Omitted against a
             database older than upstream 023.
-        startTime: { type: string, format: date-time, description: ISO-8601 with venue offset }
+        startTime: { type: string, format: date-time, description: "ISO-8601 with venue offset" }
         endTime: { type: string, format: date-time }
         dayId: { type: string, format: uuid }
         trackId: { type: string, format: uuid }
@@ -497,7 +497,7 @@ components:
             populated upstream — the affiliation is usually only a suffix on
             title — so treat its absence as normal and fall back to title.
         photoUrl: { type: string }
-        isModerator: { type: boolean, description: From the owned presentation_overlay; replaces the FE moderators.json. }
+        isModerator: { type: boolean, description: "From the owned presentation_overlay; replaces the FE moderators.json." }
     Event:
       type: object
       required: [id, name, isCurrent, timezone]
@@ -506,8 +506,8 @@ components:
         name: { type: string }
         isCurrent: { type: boolean }
         timezone: { type: string, description: "IANA venue timezone (conference_config.timezone) the instants are expressed in." }
-        venueName: { type: string, description: From conference_config.venue_name; omitted when unset. }
-        venueAddress: { type: string, description: From conference_config.venue_address; omitted when unset. }
+        venueName: { type: string, description: "From conference_config.venue_name; omitted when unset." }
+        venueAddress: { type: string, description: "From conference_config.venue_address; omitted when unset." }
     EventAgenda:
       type: object
       required: [id, eventId, timezone, date, sessions]
@@ -558,7 +558,7 @@ components:
         title: { type: string }
         startTime: { type: string, format: date-time }
         endTime: { type: string, format: date-time }
-        roomName: { type: string, description: Absent when the session has no room. }
+        roomName: { type: string, description: "Absent when the session has no room." }
         trackColor:
           type: string
           description: >-
@@ -579,7 +579,7 @@ components:
         page:
           type: object
           properties:
-            nextCursor: { type: string, description: Empty when this is the last page. }
+            nextCursor: { type: string, description: "Empty when this is the last page." }
     Attendee:
       type: object
       properties:
@@ -613,19 +613,19 @@ components:
         country: { type: string }
     PickedForYouSession:
       type: object
-      description: External recommendation, day-associated with `dayId` server-side.
+      description: "External recommendation, day-associated with `dayId` server-side."
       properties:
         id: { type: string }
         title: { type: string }
         personalizedDescription: { type: string }
-        dayId: { type: string, format: uuid, description: This backend's conference_days id; empty if the session id didn't resolve. }
+        dayId: { type: string, format: uuid, description: "This backend's conference_days id; empty if the session id didn't resolve." }
     Activity:
       type: object
       required: [id, name, startTime, endTime]
       properties:
         id: { type: string, format: uuid }
-        name: { type: string, description: The activity's title; the client groups occurrences by it. }
-        description: { type: string, description: Omitted when the activity has nothing to say beyond its name and time. }
+        name: { type: string, description: "The activity's title; the client groups occurrences by it." }
+        description: { type: string, description: "Omitted when the activity has nothing to say beyond its name and time." }
         startTime: { type: string, format: date-time }
         endTime: { type: string, format: date-time }
         location:
@@ -645,7 +645,7 @@ components:
         id: { type: string }
         name: { type: string }
         description: { type: string }
-        price: { type: number, description: In O2C, stored as DECIMAL(10,4). }
+        price: { type: number, description: "In O2C, stored as DECIMAL(10,4)." }
         imageUrl: { type: string }
         availableStock: { type: integer }
         maxPerUser:
@@ -662,7 +662,7 @@ components:
         items: { type: array, items: { $ref: "#/components/schemas/ShopItem" } }
         isShopOpen:
           type: boolean
-          description: False once conference_config.shop_closing_time has passed. A NULL closing time never closes.
+          description: "False once conference_config.shop_closing_time has passed. A NULL closing time never closes."
         activeEventId: { type: string, format: uuid }
     ShopOrderLine:
       type: object
@@ -706,9 +706,9 @@ components:
       properties:
         idempotencyKey:
           type: string
-          description: Replaying one returns the original order rather than creating a second.
-        eventId: { type: string, description: Accepted and ignored; the event is resolved server-side. }
-        totalCost: { type: number, description: Accepted and ignored; the total is recomputed from live prices. }
+          description: "Replaying one returns the original order rather than creating a second."
+        eventId: { type: string, description: "Accepted and ignored; the event is resolved server-side." }
+        totalCost: { type: number, description: "Accepted and ignored; the total is recomputed from live prices." }
         items:
           type: array
           maxItems: 50
@@ -734,13 +734,13 @@ components:
         transactionHash:
           type: string
           nullable: true
-          description: An explicit null from checkout; populated by confirm.
+          description: "An explicit null from checkout; populated by confirm."
     CheckoutStockError:
       type: object
       required: [message]
       properties:
         message: { type: string }
-        itemId: { type: string, description: The offending cart line, when one item is at fault. }
+        itemId: { type: string, description: "The offending cart line, when one item is at fault." }
         availableQuantity:
           type: integer
           description: >
