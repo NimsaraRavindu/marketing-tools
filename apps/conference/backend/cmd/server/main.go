@@ -171,6 +171,10 @@ func main() {
 		api.GET("/sessions/current", cacheable, sessionHandler.Current)
 		api.GET("/sessions/:id", cacheable, sessionHandler.Get)
 		api.GET("/events", cacheable, eventHandler.List)
+		// Registered ahead of the :eventId wildcard below. gin resolves a static
+		// segment before a param at the same depth, the same way
+		// /sessions/current and /sessions/:id already coexist here.
+		api.GET("/events/current", cacheable, eventHandler.Current)
 		api.GET("/events/:eventId/agendas", cacheable, eventHandler.Agendas)
 		api.GET("/event-agendas", cacheable, eventHandler.LegacyAgendas)
 		api.GET("/activities", cacheable, activityHandler.List)

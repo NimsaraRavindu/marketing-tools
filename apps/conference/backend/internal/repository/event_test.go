@@ -117,6 +117,75 @@ func TestEventRepo_GetEvents_OrdersByStartDateDescendingWithLatestCurrent(t *tes
 	}
 }
 
+func TestEventRepo_GetCurrentEvent_ReturnsLatestStartDate(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	newEventFixture(t, ctx, "TDD Current Older", "2020-02-02")
+	latest := newEventFixture(t, ctx, "TDD Current Latest", "2099-02-02")
+
+	event, err := repo.GetCurrentEvent(ctx)
+	if err != nil {
+		t.Fatalf("GetCurrentEvent returned error: %v", err)
+	}
+	if event.ID != latest.configID {
+		t.Errorf("GetCurrentEvent returned %s, want the latest-start_date config %s", event.ID, latest.configID)
+	}
+	if !event.IsCurrent {
+		t.Error("GetCurrentEvent must always report IsCurrent = true on the row it returns")
+	}
+}
+
+// The contract GetCurrentEvent's doc comment claims is that it resolves
+// "current" the same way GetEvents does. On tied start_dates a bare start_date
+// sort leaves that to the planner, independently per statement, so this asserts
+// the two agree rather than asserting either one in isolation.
+func TestEventRepo_GetCurrentEvent_AgreesWithGetEventsOnTiedStartDates(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	const tiedDate = "2099-03-03"
+	first := newEventFixture(t, ctx, "TDD Tied A", tiedDate)
+	second := newEventFixture(t, ctx, "TDD Tied B", tiedDate)
+
+	current, err := repo.GetCurrentEvent(ctx)
+	if err != nil {
+		t.Fatalf("GetCurrentEvent returned error: %v", err)
+	}
+
+	events, err := repo.GetEvents(ctx)
+	if err != nil {
+		t.Fatalf("GetEvents returned error: %v", err)
+	}
+	var flagged string
+	for _, e := range events {
+		if e.IsCurrent {
+			flagged = e.ID
+			break
+		}
+	}
+
+	if current.ID != flagged {
+		t.Errorf("GetCurrentEvent chose %s but GetEvents flagged %s as current; the two tied configs are %s and %s",
+			current.ID, flagged, first.configID, second.configID)
+	}
+
+	// Also pin down the direction, so the shared rule names a specific row and
+	// not merely a consistent one: highest id wins a tie. Postgres decides which
+	// that is -- comparing the ids in Go would assume a text-shaped id and give
+	// the wrong answer for, say, a numeric one.
+	var expected string
+	if err := testDB.QueryRow(ctx,
+		"SELECT id FROM conference_config WHERE id IN ($1, $2) ORDER BY id DESC LIMIT 1",
+		first.configID, second.configID,
+	).Scan(&expected); err != nil {
+		t.Fatalf("resolving the expected tie winner: %v", err)
+	}
+	if current.ID != expected {
+		t.Errorf("GetCurrentEvent chose %s, want %s (highest id among tied start_dates)", current.ID, expected)
+	}
+}
+
 func TestEventRepo_GetEvents_ReadsTimezoneAndVenueColumns(t *testing.T) {
 	ctx := context.Background()
 	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")

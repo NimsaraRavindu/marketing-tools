@@ -18,17 +18,20 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"wso2-coin-backend/internal/models"
+	"wso2-coin-backend/internal/repository"
 )
 
 // EventReader reads event/agenda data. Satisfied by *repository.EventRepo.
 type EventReader interface {
 	GetEvents(ctx context.Context) ([]models.Event, error)
+	GetCurrentEvent(ctx context.Context) (models.Event, error)
 	GetEventAgendas(ctx context.Context, eventID string) ([]models.EventAgenda, error)
 }
 
@@ -72,6 +75,32 @@ func (h *EventHandler) List(c *gin.Context) {
 		events = []models.Event{}
 	}
 	c.JSON(http.StatusOK, events)
+}
+
+// Current handles GET /events/current, returning the current conference as a
+// single object rather than an array.
+//
+// The client (useCurrentEvent) reads `event.id` from this and pins every later
+// request to it, so it must be one object: an array would leave the client
+// reading `.id` off undefined. 404 when no conference exists at all.
+//
+// This route cannot collide with GET /events/:eventId/agendas whatever the
+// registration order: that path is three segments and this one is two. The
+// static-beats-wildcard rule gin applies is what would matter for a same-depth
+// pair -- /sessions/current against /sessions/:id -- and it is that rule, not
+// ordering, that a future bare /events/:eventId would rely on.
+func (h *EventHandler) Current(c *gin.Context) {
+	event, err := h.reader.GetCurrentEvent(c.Request.Context())
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "no current event"})
+			return
+		}
+		slog.ErrorContext(c.Request.Context(), "fetching current event failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "internal error"})
+		return
+	}
+	c.JSON(http.StatusOK, event)
 }
 
 // Agendas handles GET /events/:eventId/agendas. eventId is passed straight

@@ -254,7 +254,7 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 			 LEFT JOIN track_sections sec ON sec.id = s.section_id
 			 LEFT JOIN conference_config cc ON cc.id = s.config_id
 			 %s
-			 WHERE s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
+			 WHERE s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC, id DESC LIMIT 1)
 			 ORDER BY d.date NULLS LAST, s.slot_index NULLS LAST, s.id`,
 			topicExpr, topicJoin,
 		),

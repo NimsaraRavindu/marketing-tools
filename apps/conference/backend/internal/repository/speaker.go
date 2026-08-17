@@ -122,7 +122,7 @@ func (r *SpeakerRepo) fetchSpeakerSessions(ctx context.Context, speakerID string
 		 LEFT JOIN tracks t ON t.id = s.track_id
 		 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
 		 WHERE ss.speaker_id = $1
-		   AND s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)`,
+		   AND s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC, id DESC LIMIT 1)`,
 		speakerID,
 	)
 	if err != nil {

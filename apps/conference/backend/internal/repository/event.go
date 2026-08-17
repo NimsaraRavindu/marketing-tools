@@ -60,9 +60,16 @@ func NewEventRepo(pool *pgxpool.Pool, slotMinutes int, loc *time.Location, venue
 // descending. IsCurrent is true only for the first (latest) row -- there is
 // no stored "current" flag, so this reuses the "current = latest start_date"
 // rule already established for GET /sessions/current.
+//
+// The id tiebreaker is what makes that rule shared rather than merely stated.
+// Three separate statements resolve "current" -- here, GetCurrentEvent, and the
+// literal "current" in GetEventAgendas -- and on a bare start_date sort two rows
+// with the same date leave the winner to the planner, independently per query.
+// GET /events could then flag one event isCurrent while GET /events/current
+// returned another.
 func (r *EventRepo) GetEvents(ctx context.Context) ([]models.Event, error) {
 	rows, err := r.pool.Query(ctx,
-		"SELECT id, name, timezone, venue_name, venue_address FROM conference_config ORDER BY start_date DESC",
+		"SELECT id, name, timezone, venue_name, venue_address FROM conference_config ORDER BY start_date DESC, id DESC",
 	)
 	if err != nil {
 		return nil, err
@@ -98,6 +105,55 @@ func (r *EventRepo) GetEvents(ctx context.Context) ([]models.Event, error) {
 	return events, nil
 }
 
+// GetCurrentEvent returns the single "current" conference -- the
+// conference_config with the latest start_date, breaking a tie on id, the same
+// rule every other "current conference" resolution here uses (GetEvents,
+// GetEventAgendas, and the config_id subqueries in session.go, activity.go and
+// speaker.go). IsCurrent is therefore always true on the returned row.
+//
+// The tiebreaker is load-bearing, not cosmetic: these are six independent
+// statements, and on a bare start_date sort each one picks its own winner among
+// tied rows. GET /events/current could then name one conference while
+// GET /sessions/current listed another's sessions.
+//
+// Returns ErrNotFound when no conference_config row exists at all, which the
+// handler maps to 404: the client (useCurrentEvent) reads `event.id` to pin
+// every later request to an event, so an empty object would be worse than an
+// explicit miss.
+func (r *EventRepo) GetCurrentEvent(ctx context.Context) (models.Event, error) {
+	var e models.Event
+	var tz string
+	var venueName, venueAddress *string
+
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, name, timezone, venue_name, venue_address
+		 FROM conference_config
+		 ORDER BY start_date DESC, id DESC
+		 LIMIT 1`,
+	).Scan(&e.ID, &e.Name, &tz, &venueName, &venueAddress)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.Event{}, ErrNotFound
+		}
+		return models.Event{}, err
+	}
+
+	e.IsCurrent = true
+	// conference_config.timezone is the source of truth; the env-configured
+	// venueTZ is only a fallback for an empty value.
+	e.Timezone = tz
+	if e.Timezone == "" {
+		e.Timezone = r.venueTZ
+	}
+	if venueName != nil {
+		e.VenueName = *venueName
+	}
+	if venueAddress != nil {
+		e.VenueAddress = *venueAddress
+	}
+	return e, nil
+}
+
 // GetEventAgendas returns every conference_days row for the given eventID,
 // ordered by day_index, each with its scheduled sessions grouped in (ordered
 // by slot_index). A day with zero sessions still appears, with an empty (not
@@ -116,7 +172,7 @@ func (r *EventRepo) GetEventAgendas(ctx context.Context, eventID string) ([]mode
 	configID := eventID
 	if eventID == "current" {
 		err := r.pool.QueryRow(ctx,
-			"SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1",
+			"SELECT id FROM conference_config ORDER BY start_date DESC, id DESC LIMIT 1",
 		).Scan(&configID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {

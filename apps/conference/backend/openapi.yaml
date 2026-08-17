@@ -101,6 +101,22 @@ paths:
                 items: { $ref: "#/components/schemas/Event" }
         "304": { description: Not Modified }
 
+  /events/current:
+    get:
+      tags: [events]
+      description: >
+        The current conference (the one with the latest start_date), as a single
+        object rather than an array. Clients read `id` from this and pin later
+        requests to it.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        "304": { description: Not Modified }
+        "404": { description: No conference is configured }
+
   /events/{eventId}/agendas:
     get:
       tags: [events]
