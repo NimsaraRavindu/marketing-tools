@@ -97,6 +97,7 @@ func main() {
 	appConfigRepo := repository.NewAppConfigRepo(pool)
 	favoritesRepo := repository.NewFavoritesRepo(pool)
 	activityRepo := repository.NewActivityRepo(pool, cfg.SessionSlotMinutes, cfg.VenueLocation)
+	shopRepo := repository.NewShopRepo(pool)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
@@ -117,6 +118,10 @@ func main() {
 		},
 	)
 
+	shopService := service.NewShopService(shopRepo, transactionClient, service.ShopConfig{
+		MasterWalletAddress: cfg.ShopMasterWalletAddress,
+	})
+
 	coinHandler := handlers.NewCoinHandler(coinService, coinAllocationRepo)
 	speakerHandler := handlers.NewSpeakerHandler(speakerRepo)
 	sessionHandler := handlers.NewSessionHandler(sessionRepo)
@@ -128,6 +133,7 @@ func main() {
 	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
 	notificationHandler := handlers.NewNotificationHandler(attendeeProfileRepo, notificationClient, cfg.AdminRoles)
 	activityHandler := handlers.NewActivityHandler(activityRepo)
+	shopHandler := handlers.NewShopHandler(shopService)
 	walletHandler := handlers.NewWalletHandler(walletClient, transactionClient)
 	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
 
@@ -205,6 +211,14 @@ func main() {
 		api.POST("/users/notifications", notificationHandler.Create)
 
 		api.GET("/app-configs", appConfigHandler.List)
+
+		// Shop. The catalog is the only cacheable one: stock moves, but a 60s
+		// validator is what the client already polls at, and order history and
+		// both checkout steps must never be served from a validator.
+		api.GET("/shops/items", cacheable, shopHandler.Items)
+		api.GET("/shops/orders/me", shopHandler.Orders)
+		api.POST("/shops/checkout", shopHandler.Checkout)
+		api.POST("/shops/checkout/confirm", shopHandler.ConfirmCheckout)
 
 		api.GET("/wallets/balances/me", walletHandler.Balance)
 

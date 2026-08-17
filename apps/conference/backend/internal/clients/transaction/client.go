@@ -76,6 +76,31 @@ type balanceResponse struct {
 	} `json:"payload"`
 }
 
+// TransactionDetails is the verified subset of a blockchain transaction, as
+// returned by the get-transaction-details endpoint.
+type TransactionDetails struct {
+	// Found is false when the hash is not on-chain at all.
+	Found bool `json:"found"`
+	// Success and Status are reported separately by the service and are checked
+	// independently -- a transaction can be present and mined but not successful.
+	Success bool   `json:"success"`
+	Status  string `json:"status"`
+	// AmountFormatted is the transferred amount as a decimal string, same
+	// encoding as the balance field above.
+	AmountFormatted *string `json:"amountFormatted"`
+	// DecodedData carries the decoded contract call. Verification requires
+	// Name == "transfer" and reads the recipient from Args[0].
+	DecodedData *struct {
+		Name string   `json:"name"`
+		Args []string `json:"args"`
+	} `json:"decodedData"`
+}
+
+// transactionDetailsResponse is the get-transaction-details response envelope.
+type transactionDetailsResponse struct {
+	Payload TransactionDetails `json:"payload"`
+}
+
 // NewClient builds a production Client that authenticates to the
 // Transaction/Blockchain service using OAuth2 client-credentials, per cfg.
 // The returned client is lazy: it does not contact the token endpoint until
@@ -153,8 +178,13 @@ func (c *Client) TransferToken(ctx context.Context, recipientWalletAddress strin
 // a balance lookup for an address that was just resolved should always succeed,
 // so a miss is a real fault rather than an empty balance. Reporting zero would
 // tell the user they have no coins.
+// The address is escaped for the same reason the hash is in
+// GetTransactionDetails, though it is not caller-supplied today -- it is
+// resolved server-side from the wallet service. Escaping both keeps the rule
+// "no raw value becomes a path segment" true of this file rather than true of
+// whichever call someone last audited.
 func (c *Client) GetBalance(ctx context.Context, address string) (float64, error) {
-	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-balance", address)
+	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-balance", url.PathEscape(address))
 	if err != nil {
 		return 0, fmt.Errorf("transaction: building URL: %w", err)
 	}
@@ -192,4 +222,58 @@ func (c *Client) GetBalance(ctx context.Context, address string) (float64, error
 		return 0, fmt.Errorf("transaction: parsing balance %q: %w", decoded.Payload.Balance, err)
 	}
 	return balance, nil
+}
+
+// GetTransactionDetails calls
+// GET {baseURL}/api/v1/blockchain/get-transaction-details/{txHash} and returns
+// the decoded transaction, for the shop checkout-confirm verification.
+//
+// This performs no verification itself -- it only fetches and decodes. The
+// policy decisions (right recipient, right amount, actually succeeded) live in
+// the service layer, so they are testable without an HTTP server and so this
+// client stays a transport.
+//
+// txHash is neutralised before it becomes a path segment. Callers are expected
+// to have validated it already (CheckoutConfirmRequest.Validate does), but
+// url.JoinPath resolves "." and ".." rather than treating them as literals, so a
+// raw caller-supplied segment can climb out of baseURL's path and aim this
+// request -- which carries the client-credentials token -- somewhere it was
+// never meant to go. Doing it here means the transport is safe on its own terms
+// rather than depending on every future caller remembering to check.
+//
+// Escaping alone is not sufficient: PathEscape encodes a "/" but leaves dots
+// untouched, so a segment of only dots still traverses. Hence both -- the
+// all-dots reject, and the escape for everything else.
+func (c *Client) GetTransactionDetails(ctx context.Context, txHash string) (TransactionDetails, error) {
+	if txHash == "" || strings.Trim(txHash, ".") == "" {
+		return TransactionDetails{}, fmt.Errorf("transaction: refusing %q as a path segment", txHash)
+	}
+
+	reqURL, err := url.JoinPath(c.baseURL, "api", "v1", "blockchain", "get-transaction-details", url.PathEscape(txHash))
+	if err != nil {
+		return TransactionDetails{}, fmt.Errorf("transaction: building URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return TransactionDetails{}, fmt.Errorf("transaction: building request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return TransactionDetails{}, fmt.Errorf("transaction: request to %s failed: %w", reqURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
+		return TransactionDetails{}, fmt.Errorf("transaction: GET %s returned status %d: %s", reqURL, resp.StatusCode, body)
+	}
+
+	var decoded transactionDetailsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return TransactionDetails{}, fmt.Errorf("transaction: decoding response body: %w", err)
+	}
+	return decoded.Payload, nil
 }

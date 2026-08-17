@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"wso2-coin-backend/internal/config"
@@ -185,5 +186,122 @@ func TestGetBalance_ServerErrorIsAnError(t *testing.T) {
 
 	if _, err := NewClientWithHTTPClient(srv.URL, srv.Client()).GetBalance(context.Background(), "0xW"); err == nil {
 		t.Error("expected an error for a 500 balance lookup")
+	}
+}
+
+func TestGetTransactionDetails_DecodesPayload(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"payload":{
+			"found":true,"success":true,"status":"SUCCESS","amountFormatted":"100.0000",
+			"decodedData":{"name":"transfer","args":["0xMASTER","100"]}
+		}}`))
+	}))
+	defer srv.Close()
+
+	got, err := NewClientWithHTTPClient(srv.URL, srv.Client()).
+		GetTransactionDetails(context.Background(), "0xHASH")
+	if err != nil {
+		t.Fatalf("GetTransactionDetails returned error: %v", err)
+	}
+	if gotPath != "/api/v1/blockchain/get-transaction-details/0xHASH" {
+		t.Errorf("path = %q, want the hash as a path segment", gotPath)
+	}
+	if !got.Found || !got.Success || got.Status != "SUCCESS" {
+		t.Errorf("got %+v, want a found, successful transaction", got)
+	}
+	if got.AmountFormatted == nil || *got.AmountFormatted != "100.0000" {
+		t.Errorf("amountFormatted = %v, want 100.0000", got.AmountFormatted)
+	}
+	if got.DecodedData == nil || got.DecodedData.Name != "transfer" {
+		t.Fatalf("decodedData = %+v, want a transfer call", got.DecodedData)
+	}
+	if len(got.DecodedData.Args) != 2 || got.DecodedData.Args[0] != "0xMASTER" {
+		t.Errorf("args = %v, want the recipient first", got.DecodedData.Args)
+	}
+}
+
+// A hash that isn't on-chain comes back as a 200 with found=false, not an HTTP
+// error -- the caller must be able to tell that apart from a transport failure.
+func TestGetTransactionDetails_NotFoundIsNotAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"payload":{"found":false}}`))
+	}))
+	defer srv.Close()
+
+	got, err := NewClientWithHTTPClient(srv.URL, srv.Client()).
+		GetTransactionDetails(context.Background(), "0xHASH")
+	if err != nil {
+		t.Fatalf("GetTransactionDetails returned error: %v", err)
+	}
+	if got.Found {
+		t.Error("found = true, want false")
+	}
+	if got.DecodedData != nil {
+		t.Errorf("decodedData = %+v, want nil", got.DecodedData)
+	}
+}
+
+func TestGetTransactionDetails_UpstreamErrorIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	_, err := NewClientWithHTTPClient(srv.URL, srv.Client()).
+		GetTransactionDetails(context.Background(), "0xHASH")
+	if err == nil {
+		t.Error("expected an error for a 502 response")
+	}
+}
+
+// The hash lands in the request path and this request carries the backend's own
+// client-credentials token, so the transport must not let a caller steer it off
+// the configured base path -- regardless of whether the caller validated first.
+func TestGetTransactionDetails_HashCannotEscapeTheBasePath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"payload":{"found":false}}`))
+	}))
+	defer srv.Close()
+
+	const wantPrefix = "/api/v1/blockchain/get-transaction-details/"
+
+	for _, hash := range []string{
+		"../../../../admin/internal",
+		"foo/../../bar",
+		"..%2Fadmin",
+	} {
+		t.Run(hash, func(t *testing.T) {
+			gotPath = ""
+			_, err := NewClientWithHTTPClient(srv.URL, srv.Client()).
+				GetTransactionDetails(context.Background(), hash)
+			// Either refusing outright or escaping is acceptable; silently
+			// issuing a request to a climbed-out path is not.
+			if err != nil {
+				return
+			}
+			if !strings.HasPrefix(gotPath, wantPrefix) {
+				t.Errorf("request path = %q, want it to stay under %q", gotPath, wantPrefix)
+			}
+		})
+	}
+}
+
+// A segment of only dots survives url.PathEscape untouched, so escaping alone
+// would still traverse. This is the case the explicit reject exists for.
+func TestGetTransactionDetails_DotSegmentIsRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no request should have been sent, got %q", r.URL.Path)
+	}))
+	defer srv.Close()
+
+	for _, hash := range []string{"", ".", "..", "..."} {
+		if _, err := NewClientWithHTTPClient(srv.URL, srv.Client()).
+			GetTransactionDetails(context.Background(), hash); err == nil {
+			t.Errorf("GetTransactionDetails(%q) returned no error, want a refusal", hash)
+		}
 	}
 }

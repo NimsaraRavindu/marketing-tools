@@ -91,16 +91,30 @@ type AppConfigReader interface {
 	List(ctx context.Context) ([]models.AppConfig, error)
 }
 
-// ActivityReader is satisfied by *ActivityRepo.
-type ActivityReader interface {
-	List(ctx context.Context) ([]models.Activity, error)
-}
-
 // FavoritesReader is satisfied by *FavoritesRepo.
 type FavoritesReader interface {
 	List(ctx context.Context, userUUID string) ([]models.Favorite, error)
 	Add(ctx context.Context, userUUID, sessionID string) error
 	Remove(ctx context.Context, userUUID, sessionID string) error
+}
+
+// ActivityReader is satisfied by *ActivityRepo.
+type ActivityReader interface {
+	List(ctx context.Context) ([]models.Activity, error)
+}
+
+// ShopRepository is satisfied by *ShopRepo. Consumed by the shop service, which
+// needs both the catalog reads and the two transactional writes.
+type ShopRepository interface {
+	CurrentShopEvent(ctx context.Context) (eventID string, isOpen bool, err error)
+	ListItems(ctx context.Context, eventID string) ([]models.ShopItem, error)
+	OrderHistory(ctx context.Context, userUUID string) ([]models.ShopOrder, error)
+	Checkout(ctx context.Context, p CheckoutParams) (orderID string, total float64, err error)
+	ConfirmOrder(
+		ctx context.Context,
+		orderID, userUUID, txHash, updatedBy string,
+		verify func(ctx context.Context, expectedTotal float64) error,
+	) error
 }
 
 // Compile-time assertions that the concrete repos satisfy their interfaces.
@@ -117,4 +131,5 @@ var (
 	_ AppConfigReader          = (*AppConfigRepo)(nil)
 	_ FavoritesReader          = (*FavoritesRepo)(nil)
 	_ ActivityReader           = (*ActivityRepo)(nil)
+	_ ShopRepository           = (*ShopRepo)(nil)
 )
