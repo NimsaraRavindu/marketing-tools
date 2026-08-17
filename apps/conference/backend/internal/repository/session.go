@@ -44,6 +44,7 @@ type SessionRepo struct {
 	slotMinutes int
 	piiKey      []byte
 	loc         *time.Location
+	caps        schemaCaps
 }
 
 // NewSessionRepo constructs a SessionRepo backed by the given pool.
@@ -137,19 +138,25 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 	var date *time.Time
 	var startMinute *int
 
+	topicExpr, topicJoin := r.caps.topicSQL(ctx, r.pool)
+
 	err := r.pool.QueryRow(ctx,
-		`SELECT s.id, s.kind, s.title, s.description, s.category,
-		        s.day_id, s.slot_index, s.duration_slots, s.track_id, s.room_id,
-		        s.article_url, s.article_label, s.video_url, s.video_label,
-		        d.date, d.start_minute, t.color, r.name, rc.color, sec.label, cc.timezone
-		 FROM sessions s
-		 LEFT JOIN conference_days d ON s.day_id = d.id
-		 LEFT JOIN tracks t ON t.id = s.track_id
-		 LEFT JOIN rooms r ON r.id = s.room_id
-		 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
-		 LEFT JOIN track_sections sec ON sec.id = s.section_id
-		 LEFT JOIN conference_config cc ON cc.id = s.config_id
-		 WHERE s.id = $1`,
+		fmt.Sprintf(
+			`SELECT s.id, s.kind, s.title, s.description, %s,
+			        s.day_id, s.slot_index, s.duration_slots, s.track_id, s.room_id,
+			        s.article_url, s.article_label, s.video_url, s.video_label,
+			        d.date, d.start_minute, t.color, r.name, rc.color, sec.label, cc.timezone
+			 FROM sessions s
+			 LEFT JOIN conference_days d ON s.day_id = d.id
+			 LEFT JOIN tracks t ON t.id = s.track_id
+			 LEFT JOIN rooms r ON r.id = s.room_id
+			 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
+			 LEFT JOIN track_sections sec ON sec.id = s.section_id
+			 LEFT JOIN conference_config cc ON cc.id = s.config_id
+			 %s
+			 WHERE s.id = $1`,
+			topicExpr, topicJoin,
+		),
 		id,
 	).Scan(
 		&s.ID, &s.Kind, &s.Title, &s.Description, &category,
@@ -231,20 +238,26 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 // session with no speakers (breaks, registration) is now included rather than
 // dropped; embedded speaker objects arrive in Phase B.
 func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session, error) {
+	topicExpr, topicJoin := r.caps.topicSQL(ctx, r.pool)
+
 	rows, err := r.pool.Query(ctx,
-		`SELECT s.id, s.kind, s.title, s.description, s.category,
-		        s.day_id, s.slot_index, s.duration_slots, s.track_id, s.room_id,
-		        s.article_url, s.article_label, s.video_url, s.video_label,
-		        d.date, d.start_minute, t.color, r.name, rc.color, sec.label, cc.timezone
-		 FROM sessions s
-		 LEFT JOIN conference_days d ON s.day_id = d.id
-		 LEFT JOIN tracks t ON t.id = s.track_id
-		 LEFT JOIN rooms r ON r.id = s.room_id
-		 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
-		 LEFT JOIN track_sections sec ON sec.id = s.section_id
-		 LEFT JOIN conference_config cc ON cc.id = s.config_id
-		 WHERE s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
-		 ORDER BY d.date NULLS LAST, s.slot_index NULLS LAST, s.id`,
+		fmt.Sprintf(
+			`SELECT s.id, s.kind, s.title, s.description, %s,
+			        s.day_id, s.slot_index, s.duration_slots, s.track_id, s.room_id,
+			        s.article_url, s.article_label, s.video_url, s.video_label,
+			        d.date, d.start_minute, t.color, r.name, rc.color, sec.label, cc.timezone
+			 FROM sessions s
+			 LEFT JOIN conference_days d ON s.day_id = d.id
+			 LEFT JOIN tracks t ON t.id = s.track_id
+			 LEFT JOIN rooms r ON r.id = s.room_id
+			 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
+			 LEFT JOIN track_sections sec ON sec.id = s.section_id
+			 LEFT JOIN conference_config cc ON cc.id = s.config_id
+			 %s
+			 WHERE s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
+			 ORDER BY d.date NULLS LAST, s.slot_index NULLS LAST, s.id`,
+			topicExpr, topicJoin,
+		),
 	)
 	if err != nil {
 		return nil, err
