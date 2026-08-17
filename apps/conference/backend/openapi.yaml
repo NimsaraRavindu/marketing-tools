@@ -245,12 +245,11 @@ paths:
       tags: [events]
       summary: Non-session happenings on the General page
       description: >
-        Registration desk hours, meals and parties -- everything the General
-        page shows that is not a session. Ordered by name then start time, so
-        occurrences that share a name (the client groups by name) arrive
-        chronologically. Always an array; empty until rows are seeded, since
-        this service has no write path for activities. Carries
-        ETag/Cache-Control validators.
+        Sourced from the shared sessions table where kind='activity' (upstream
+        migration 021), scoped to the current conference. Unscheduled activities
+        are excluded, since start/end time is the whole point of the rendering.
+        `location` is always absent: upstream models no per-activity location.
+        Carries ETag/Cache-Control validators.
       responses:
         "200":
           description: OK
@@ -389,30 +388,6 @@ components:
         sessions:
           type: array
           items: { $ref: "#/components/schemas/Session" }
-    Activity:
-      type: object
-      description: >-
-        One non-session happening. Several activities commonly share a name and
-        differ only by time; the client groups them by name itself.
-      required: [id, name, startTime, endTime]
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        description: { type: string, description: Omitted when the activity has nothing to say beyond its name and time. }
-        startTime: { type: string, format: date-time, description: ISO-8601 with venue offset }
-        endTime: { type: string, format: date-time }
-        location:
-          allOf: [{ $ref: "#/components/schemas/ActivityLocation" }]
-          description: >-
-            Omitted entirely when no location is recorded, rather than sent as
-            an object of empty strings.
-    ActivityLocation:
-      type: object
-      required: [name]
-      properties:
-        name: { type: string }
-        address: { type: string }
-        floorPlanUrl: { type: string }
     Speaker:
       type: object
       description: >-
@@ -512,3 +487,22 @@ components:
         title: { type: string }
         personalizedDescription: { type: string }
         dayId: { type: string, format: uuid, description: This backend's conference_days id; empty if the session id didn't resolve. }
+    Activity:
+      type: object
+      required: [id, name, startTime, endTime]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, description: The activity's title; the client groups occurrences by it. }
+        description: { type: string, description: Omitted when the activity has nothing to say beyond its name and time. }
+        startTime: { type: string, format: date-time }
+        endTime: { type: string, format: date-time }
+        location:
+          type: object
+          description: >
+            Always omitted. Upstream models no per-activity location, and the
+            room-mapping trigger resolves room to NULL for non-session kinds.
+            Retained because the client optional-chains it.
+          properties:
+            name: { type: string }
+            address: { type: string }
+            floorPlanUrl: { type: string }

@@ -18,12 +18,19 @@ package models
 
 import "time"
 
-// ActivityLocation is where an activity happens. Stored inline on the
-// activities row (migration 011) but kept nested in the response, matching
-// the shape the client already reads.
+// ActivityLocation is where an activity happens, nested in the response to match
+// the shape the client reads.
+//
+// Always absent in practice: activities are sourced from the shared sessions
+// table (kind='activity'), which models no location at any granularity finer than
+// the event's own venue, and whose room-mapping trigger resolves room to NULL for
+// every non-session kind. The type stays because the client reads
+// `location?.name`/`.address`/`.floorPlanUrl` and because upstream may model
+// activity locations later; nothing here has to change if it does.
+//
 // A location recorded with only a name omits the other two fields entirely
-// rather than emitting "", per the API-wide "optional scalars are omitted
-// when empty, never empty strings" convention (openapi.yaml header).
+// rather than emitting "", per the API-wide "optional scalars are omitted when
+// empty, never empty strings" convention (openapi.yaml header).
 type ActivityLocation struct {
 	Name         string `json:"name"`
 	Address      string `json:"address,omitempty"`
