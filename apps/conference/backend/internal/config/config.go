@@ -43,6 +43,13 @@ type ExternalServiceConfig struct {
 	OAuth    OAuthClientConfig
 }
 
+// EmailServiceConfig holds configuration for the email service.
+type EmailServiceConfig struct {
+	Endpoint string
+	OAuth    OAuthClientConfig
+	From     string
+}
+
 // AIAgentConfig holds the base URLs for the external AI agent services
 // (matchmaking, personalize, picked-for-you, chat) and the shared request
 // timeout applied to all of them. Deliberately no OAuth sub-struct: unlike
@@ -98,6 +105,9 @@ type Config struct {
 	// a different slot size.
 	SessionSlotMinutes int
 
+	StaleOrderCleanupIntervalSeconds int
+	CoinStaleOrderTimeoutMinutes     int
+
 	// VenueTimezone is the IANA name of the conference venue's timezone
 	// (VENUE_TIMEZONE env, default "UTC"). Session times are stored as a
 	// day date + slot offset with no zone in the shared schema, so the wall
@@ -125,6 +135,7 @@ type Config struct {
 	QRPortal    ExternalServiceConfig
 	Wallet      ExternalServiceConfig
 	Transaction ExternalServiceConfig
+	Email       EmailServiceConfig
 	// Notification is the external WSO2 notification service that fans a
 	// broadcast out to attendees' devices. This backend never talks to FCM
 	// itself -- it hands the recipient list to that service and stops there.
@@ -186,6 +197,20 @@ func Load() Config {
 		}
 	}
 
+	staleOrderCleanupIntervalSeconds := 300
+	if v := os.Getenv("STALE_ORDER_CLEANUP_INTERVAL_SECONDS"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			staleOrderCleanupIntervalSeconds = int(parsed)
+		}
+	}
+
+	coinStaleOrderTimeoutMinutes := 5
+	if v := os.Getenv("COIN_STALE_ORDER_TIMEOUT_MINUTES"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			coinStaleOrderTimeoutMinutes = parsed
+		}
+	}
+
 	// Decoded best-effort here; Validate() is where a missing/malformed key
 	// is actually rejected, matching this file's existing Load()-is-tolerant,
 	// Validate()-is-strict split.
@@ -228,6 +253,8 @@ func Load() Config {
 		EnableQrValidations:           enableQrValidations,
 		SessionEndTimeOffsetMinutes:   sessionEndTimeOffsetMinutes,
 		SessionSlotMinutes:            sessionSlotMinutes,
+		StaleOrderCleanupIntervalSeconds: staleOrderCleanupIntervalSeconds,
+		CoinStaleOrderTimeoutMinutes:     coinStaleOrderTimeoutMinutes,
 		VenueTimezone:                 venueTimezone,
 		VenueLocation:                 venueLocation,
 		venueTZLoadErr:                venueTZLoadErr,
@@ -257,6 +284,15 @@ func Load() Config {
 				ClientID:     os.Getenv("TRANSACTION_CLIENT_ID"),
 				ClientSecret: os.Getenv("TRANSACTION_CLIENT_SECRET"),
 			},
+		},
+		Email: EmailServiceConfig{
+			Endpoint: os.Getenv("EMAIL_SERVICE_URL"),
+			OAuth: OAuthClientConfig{
+				TokenURL:     os.Getenv("EMAIL_OAUTH_TOKEN_URL"),
+				ClientID:     os.Getenv("EMAIL_OAUTH_CLIENT_ID"),
+				ClientSecret: os.Getenv("EMAIL_OAUTH_CLIENT_SECRET"),
+			},
+			From: os.Getenv("EMAIL_FROM"),
 		},
 		Notification: ExternalServiceConfig{
 			Endpoint: os.Getenv("NOTIFICATION_ENDPOINT"),

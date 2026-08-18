@@ -115,6 +115,7 @@ type ShopRepository interface {
 		orderID, userUUID, txHash, updatedBy string,
 		verify func(ctx context.Context, expectedTotal float64) error,
 	) error
+	MarkStaleOrders(ctx context.Context, timeoutMinutes int) (int, error)
 }
 
 // Compile-time assertions that the concrete repos satisfy their interfaces.
