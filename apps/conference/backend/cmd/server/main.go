@@ -137,7 +137,7 @@ func main() {
 	connectionHandler := handlers.NewConnectionHandler(connectionRepo, attendeeProfileRepo)
 	favoritesHandler := handlers.NewFavoritesHandler(favoritesRepo)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackRepo, eventRepo)
-	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
+	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo, cfg.ShopMasterWalletAddress)
 	notificationHandler := handlers.NewNotificationHandler(attendeeProfileRepo, notificationClient, cfg.AdminRoles)
 	activityHandler := handlers.NewActivityHandler(activityRepo)
 	shopHandler := handlers.NewShopHandler(shopService)
