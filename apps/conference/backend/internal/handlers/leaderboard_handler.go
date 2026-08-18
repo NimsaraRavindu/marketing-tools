@@ -17,6 +17,8 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -54,6 +56,19 @@ func (h *LeaderboardHandler) GetLeaderboard(c *gin.Context) {
 		return
 	}
 
+	user := middleware.UserInfoFromContext(c.Request.Context())
+	currentUserID := ""
+	if user != nil {
+		currentUserID = user.UserID
+	}
+
+	for i := range entries {
+		if entries[i].UserID != currentUserID {
+			hash := sha256.Sum256([]byte(entries[i].UserID))
+			entries[i].UserID = hex.EncodeToString(hash[:])[:16]
+		}
+	}
+
 	c.JSON(http.StatusOK, entries)
 }
 
@@ -82,14 +97,14 @@ func (h *LeaderboardHandler) UpdatePreferences(c *gin.Context) {
 	}
 
 	var req struct {
-		ShowFullName bool `json:"showFullName"`
+		ShowFullName *bool `json:"showFullName" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid request payload"})
 		return
 	}
 
-	if err := h.repo.UpdatePreferences(c.Request.Context(), user.UserID, req.ShowFullName); err != nil {
+	if err := h.repo.UpdatePreferences(c.Request.Context(), user.UserID, *req.ShowFullName); err != nil {
 		slog.ErrorContext(c.Request.Context(), "failed to update leaderboard preferences", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "internal error"})
 		return

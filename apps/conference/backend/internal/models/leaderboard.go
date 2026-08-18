@@ -22,6 +22,6 @@ type LeaderboardEntry struct {
 	UserID       string  `json:"userId"`
 	FirstName    string  `json:"firstName"`
 	LastName     string  `json:"lastName"`
-	ShowFullName bool    `json:"showFullName"`
+	ShowFullName bool    `json:"-"`
 	TotalCoins   float64 `json:"totalCoins"`
 }

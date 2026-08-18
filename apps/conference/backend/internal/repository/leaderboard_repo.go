@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -79,8 +80,18 @@ func (r *LeaderboardRepo) GetLeaderboard(ctx context.Context, limit int) ([]mode
 		}
 
 		// Decrypt PII fields
-		entry.FirstName, _ = r.decrypt(firstNameEnc)
-		entry.LastName, _ = r.decrypt(lastNameEnc)
+		firstName, err := r.decrypt(firstNameEnc)
+		if err != nil {
+			slog.ErrorContext(ctx, "failed to decrypt leaderboard first name", "error", err)
+			continue
+		}
+		lastName, err := r.decrypt(lastNameEnc)
+		if err != nil {
+			slog.ErrorContext(ctx, "failed to decrypt leaderboard last name", "error", err)
+			continue
+		}
+		entry.FirstName = firstName
+		entry.LastName = lastName
 
 		if !entry.ShowFullName {
 			if len(entry.FirstName) > 0 {
@@ -126,9 +137,12 @@ func (r *LeaderboardRepo) GetPreferences(ctx context.Context, userUUID string) (
 }
 
 func (r *LeaderboardRepo) UpdatePreferences(ctx context.Context, userUUID string, showFullName bool) error {
-	_, err := r.pool.Exec(ctx, "UPDATE attendees SET show_full_name = $1 WHERE idp_uuid = $2", showFullName, userUUID)
+	cmdTag, err := r.pool.Exec(ctx, "UPDATE attendees SET show_full_name = $1 WHERE idp_uuid = $2", showFullName, userUUID)
 	if err != nil {
 		return fmt.Errorf("update leaderboard preferences: %w", err)
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return errors.New("attendee not found")
 	}
 	return nil
 }
