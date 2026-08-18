@@ -39,9 +39,12 @@ func (h *LeaderboardHandler) GetLeaderboard(c *gin.Context) {
 	limitStr := c.Query("limit")
 	limit := 10
 	if limitStr != "" {
-		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
-			limit = parsed
+		parsed, err := strconv.Atoi(limitStr)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "invalid limit parameter"})
+			return
 		}
+		limit = parsed
 	}
 
 	entries, err := h.repo.GetLeaderboard(c.Request.Context(), limit)

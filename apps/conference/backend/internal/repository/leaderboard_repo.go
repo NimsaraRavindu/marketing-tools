@@ -37,9 +37,14 @@ func NewLeaderboardRepo(pool *pgxpool.Pool, piiKey []byte) *LeaderboardRepo {
 	return &LeaderboardRepo{pool: pool, piiKey: piiKey}
 }
 
+const maxLeaderboardLimit = 100
+
 func (r *LeaderboardRepo) GetLeaderboard(ctx context.Context, limit int) ([]models.LeaderboardEntry, error) {
 	if limit <= 0 {
 		limit = 10
+	}
+	if limit > maxLeaderboardLimit {
+		limit = maxLeaderboardLimit
 	}
 
 	query := `
