@@ -671,3 +671,69 @@ func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation
 }
+
+// MarkStaleOrders expires PENDING orders older than timeoutMinutes and restores their stock.
+func (r *ShopRepo) MarkStaleOrders(ctx context.Context, timeoutMinutes int) (int, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Fetch orders to cancel to restore their stock
+	selectQuery := `
+		SELECT id FROM shop_order
+		WHERE status = 'PENDING' 
+		  AND created_on < NOW() - INTERVAL '1 minute' * $1
+		FOR UPDATE SKIP LOCKED
+	`
+	rows, err := tx.Query(ctx, selectQuery, timeoutMinutes)
+	if err != nil {
+		return 0, fmt.Errorf("select stale orders: %w", err)
+	}
+	var staleOrderIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan stale order id: %w", err)
+		}
+		staleOrderIDs = append(staleOrderIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("rows iterate error: %w", err)
+	}
+
+	if len(staleOrderIDs) == 0 {
+		return 0, nil
+	}
+
+	// Restore stock for these orders
+	for _, orderID := range staleOrderIDs {
+		// Cancel the order
+		tag, err := tx.Exec(ctx, `UPDATE shop_order SET status = 'EXPIRED', updated_on = NOW(), updated_by = 'SYSTEM' WHERE id = $1 AND status = 'PENDING'`, orderID)
+		if err != nil {
+			return 0, fmt.Errorf("update stale order %s: %w", orderID, err)
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+
+		// Restore stock
+		_, err = tx.Exec(ctx, `
+			UPDATE shop_item i
+			SET available_stock = i.available_stock + oi.quantity
+			FROM shop_order_item oi
+			WHERE i.id = oi.item_id AND oi.order_id = $1
+		`, orderID)
+		if err != nil {
+			return 0, fmt.Errorf("restore stock for stale order %s: %w", orderID, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit stale orders tx: %w", err)
+	}
+	return len(staleOrderIDs), nil
+}

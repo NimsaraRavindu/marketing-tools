@@ -29,6 +29,7 @@ import (
 	"wso2-coin-backend/internal/clients/transaction"
 	"wso2-coin-backend/internal/models"
 	"wso2-coin-backend/internal/repository"
+	"log/slog"
 )
 
 // Shop-level sentinel errors raised by this service, mapped to HTTP status
@@ -66,6 +67,10 @@ type TransactionDetailsClient interface {
 	GetTransactionDetails(ctx context.Context, txHash string) (transaction.TransactionDetails, error)
 }
 
+type EmailClient interface {
+	SendEmail(ctx context.Context, to []string, subject, template string) error
+}
+
 // ShopConfig holds the deployment settings the shop flow needs.
 type ShopConfig struct {
 	// MasterWalletAddress is the merchant wallet every shop payment must be
@@ -73,6 +78,8 @@ type ShopConfig struct {
 	// which is what stops a caller confirming an order by pointing at any
 	// unrelated transfer they can find on-chain.
 	MasterWalletAddress string
+	StaleOrderCleanupIntervalSeconds int
+	CoinStaleOrderTimeoutMinutes     int
 }
 
 // ShopService orchestrates the shop catalog, order history and the two-step
@@ -82,6 +89,7 @@ type ShopConfig struct {
 type ShopService struct {
 	shop        repository.ShopRepository
 	transaction TransactionDetailsClient
+	email       EmailClient
 	cfg         ShopConfig
 
 	// NewOrderID generates an order id; overridable in tests so a checkout
@@ -90,10 +98,11 @@ type ShopService struct {
 }
 
 // NewShopService constructs a ShopService.
-func NewShopService(shop repository.ShopRepository, txClient TransactionDetailsClient, cfg ShopConfig) *ShopService {
+func NewShopService(shop repository.ShopRepository, txClient TransactionDetailsClient, emailClient EmailClient, cfg ShopConfig) *ShopService {
 	return &ShopService{
 		shop:        shop,
 		transaction: txClient,
+		email:       emailClient,
 		cfg:         cfg,
 		NewOrderID:  newOrderID,
 	}
@@ -247,6 +256,35 @@ func (s *ShopService) ConfirmCheckout(ctx context.Context, userUUID, email strin
 	}
 
 	txHash := req.TransactionHash
+
+	// Send confirmation email asynchronously
+	go func(orderID, userEmail string) {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		orders, err := s.shop.OrderHistory(bgCtx, userUUID)
+		if err != nil {
+			slog.Error("failed to get order for email", "order_id", orderID, "error", err)
+			return
+		}
+
+		var confirmedOrder *models.ShopOrder
+		for i := range orders {
+			if orders[i].OrderID == orderID {
+				confirmedOrder = &orders[i]
+				break
+			}
+		}
+
+		if confirmedOrder != nil {
+			htmlBody := GenerateOrderConfirmationEmail(*confirmedOrder, confirmedOrder.ShippingRecipientName)
+			err = s.email.SendEmail(bgCtx, []string{userEmail}, "Your WSO2 Conference Shop Order", htmlBody)
+			if err != nil {
+				slog.Error("failed to send order confirmation email", "order_id", orderID, "error", err)
+			}
+		}
+	}(req.OrderID, email)
+
 	return models.CheckoutResponse{OrderID: req.OrderID, TransactionHash: &txHash}, nil
 }
 
@@ -299,4 +337,25 @@ func (s *ShopService) verifyPayment(_ context.Context, d transaction.Transaction
 	}
 
 	return nil
+}
+
+// Start runs a background worker to periodically clean up stale PENDING orders.
+func (s *ShopService) Start(ctx context.Context) {
+	ticker := time.NewTicker(time.Duration(s.cfg.StaleOrderCleanupIntervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Execute cleanup
+			count, err := s.shop.MarkStaleOrders(ctx, s.cfg.CoinStaleOrderTimeoutMinutes)
+			if err != nil {
+				slog.Error("Failed to mark stale orders", "error", err)
+			} else if count > 0 {
+				slog.Info("Marked stale orders as EXPIRED", "count", count)
+			}
+		}
+	}
 }

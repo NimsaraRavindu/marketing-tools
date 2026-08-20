@@ -35,12 +35,13 @@ type AppConfigReader interface {
 // no write route through this API, matching the old service exactly (see
 // .claude/PLAN.md).
 type AppConfigHandler struct {
-	configs AppConfigReader
+	configs               AppConfigReader
+	merchantWalletAddress string
 }
 
 // NewAppConfigHandler constructs an AppConfigHandler.
-func NewAppConfigHandler(configs AppConfigReader) *AppConfigHandler {
-	return &AppConfigHandler{configs: configs}
+func NewAppConfigHandler(configs AppConfigReader, merchantWalletAddress string) *AppConfigHandler {
+	return &AppConfigHandler{configs: configs, merchantWalletAddress: merchantWalletAddress}
 }
 
 // List handles GET /app-configs, returning every row verbatim regardless of
@@ -55,5 +56,13 @@ func (h *AppConfigHandler) List(c *gin.Context) {
 	if configs == nil {
 		configs = []models.AppConfig{}
 	}
+
+	if h.merchantWalletAddress != "" {
+		configs = append(configs, models.AppConfig{
+			Key:   "merchantWalletAddress",
+			Value: h.merchantWalletAddress,
+		})
+	}
+
 	c.JSON(http.StatusOK, configs)
 }

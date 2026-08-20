@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"wso2-coin-backend/internal/clients/aiagent"
+	"wso2-coin-backend/internal/clients/email"
 	"wso2-coin-backend/internal/clients/notification"
 	"wso2-coin-backend/internal/clients/qrportal"
 	"wso2-coin-backend/internal/clients/transaction"
@@ -103,6 +104,7 @@ func main() {
 	walletClient := wallet.NewClient(cfg.Wallet)
 	transactionClient := transaction.NewClient(cfg.Transaction)
 	aiAgentClient := aiagent.NewClient(cfg.AIAgent)
+	emailClient := email.NewClient(cfg.Email)
 	notificationClient := notification.NewClient(cfg.Notification)
 
 	coinService := service.NewCoinService(
@@ -118,9 +120,14 @@ func main() {
 		},
 	)
 
-	shopService := service.NewShopService(shopRepo, transactionClient, service.ShopConfig{
+	shopService := service.NewShopService(shopRepo, transactionClient, emailClient, service.ShopConfig{
 		MasterWalletAddress: cfg.ShopMasterWalletAddress,
+		StaleOrderCleanupIntervalSeconds: cfg.StaleOrderCleanupIntervalSeconds,
+		CoinStaleOrderTimeoutMinutes: cfg.CoinStaleOrderTimeoutMinutes,
 	})
+	
+	// Start the cron job for cancelling stale shop orders
+	go shopService.Start(context.Background())
 
 	coinHandler := handlers.NewCoinHandler(coinService, coinAllocationRepo)
 	speakerHandler := handlers.NewSpeakerHandler(speakerRepo)
@@ -130,7 +137,7 @@ func main() {
 	connectionHandler := handlers.NewConnectionHandler(connectionRepo, attendeeProfileRepo)
 	favoritesHandler := handlers.NewFavoritesHandler(favoritesRepo)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackRepo, eventRepo)
-	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo)
+	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo, cfg.ShopMasterWalletAddress)
 	notificationHandler := handlers.NewNotificationHandler(attendeeProfileRepo, notificationClient, cfg.AdminRoles)
 	activityHandler := handlers.NewActivityHandler(activityRepo)
 	shopHandler := handlers.NewShopHandler(shopService)
