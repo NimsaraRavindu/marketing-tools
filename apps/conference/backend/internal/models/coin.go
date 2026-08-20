@@ -28,6 +28,7 @@ const (
 	EventTypeSession EventType = "SESSION"
 	EventTypeO2Bar   EventType = "O2BAR"
 	EventTypeGeneral EventType = "GENERAL"
+	EventTypePartner EventType = "PARTNER"
 )
 
 // String returns the string representation of EventType
@@ -60,7 +61,9 @@ type QrCodeInfo struct {
 	EventType     EventType `json:"eventType"`
 	SessionID     string    `json:"sessionId,omitempty"`
 	Email         string    `json:"email,omitempty"`
+	FullName      string    `json:"fullName,omitempty"`
 	EventTypeName string    `json:"eventTypeName,omitempty"`
+	Domain        string    `json:"domain,omitempty"`
 }
 
 // ConferenceQrCode represents a QR code fetched from the external QR Portal service
@@ -73,9 +76,16 @@ type ConferenceQrCode struct {
 	CreatedOn   string     `json:"createdOn"`
 }
 
+// ConferenceQrCodesResponse represents a paginated/list response from the external QR Portal
+type ConferenceQrCodesResponse struct {
+	Qrs        []ConferenceQrCode `json:"qrs"`
+	TotalCount int                `json:"totalCount"`
+}
+
 // Wallet represents a user's primary wallet
 type Wallet struct {
-	WalletAddress string `json:"walletAddress"`
+	WalletAddress string  `json:"walletAddress"`
+	Balance       float64 `json:"balance"`
 }
 
 // WalletBalance is the GET /wallets/balances/me response.
