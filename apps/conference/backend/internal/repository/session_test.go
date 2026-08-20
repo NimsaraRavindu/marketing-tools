@@ -21,6 +21,8 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -370,20 +372,12 @@ func TestSessionRepo_GetSession_ModeratorComesFromOverlay(t *testing.T) {
 	}
 }
 
-func TestSessionRepo_GetSession_ResolvesTrackColorAndRoomName(t *testing.T) {
+func TestSessionRepo_GetSession_ResolvesColorTokenAndRoomName(t *testing.T) {
 	ctx := context.Background()
+	requireColorTokenColumns(t, ctx)
 	repo := NewSessionRepo(testDB, 5, speakerTestKey, time.UTC)
 
 	fixture := newSessionFixture(t, ctx, "2099-09-01", 480)
-
-	var trackID string
-	if err := testDB.QueryRow(ctx,
-		"INSERT INTO tracks (day_id, color, position) VALUES ($1, '#123abc', 0) RETURNING id",
-		fixture.dayID,
-	).Scan(&trackID); err != nil {
-		t.Fatalf("failed to insert track: %v", err)
-	}
-	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM tracks WHERE id = $1", trackID) })
 
 	var roomID string
 	if err := testDB.QueryRow(ctx,
@@ -394,8 +388,12 @@ func TestSessionRepo_GetSession_ResolvesTrackColorAndRoomName(t *testing.T) {
 		t.Fatalf("failed to insert room: %v", err)
 	}
 	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID) })
+	setColorToken(t, ctx, "rooms", roomID, "blue")
 
-	insertRoomColor(t, ctx, roomID, "#654cba")
+	// The track carries a different token, so this also pins the precedence:
+	// the room wins.
+	trackID := insertTrack(t, ctx, fixture.dayID, &roomID)
+	setColorToken(t, ctx, "tracks", trackID, "green")
 
 	var sessionID string
 	if err := testDB.QueryRow(ctx,
@@ -411,29 +409,122 @@ func TestSessionRepo_GetSession_ResolvesTrackColorAndRoomName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession returned error: %v", err)
 	}
-	if session.TrackColor != "#123abc" {
-		t.Errorf("TrackColor = %q, want %q (from tracks.color)", session.TrackColor, "#123abc")
+	if session.ColorToken != "blue" {
+		t.Errorf("ColorToken = %q, want %q (rooms.color_token wins over the track's)", session.ColorToken, "blue")
 	}
 	if session.RoomName != "Blue Hall" {
 		t.Errorf("RoomName = %q, want %q (from rooms.name)", session.RoomName, "Blue Hall")
 	}
-	if session.RoomColor != "#654cba" {
-		t.Errorf("RoomColor = %q, want %q (from room_colors.color)", session.RoomColor, "#654cba")
+}
+
+// A session whose room has no token falls through to its track's, which is the
+// case upstream 027 left the fallback for: a track that has no room yet.
+func TestSessionRepo_GetSession_FallsBackToTrackColorToken(t *testing.T) {
+	ctx := context.Background()
+	requireColorTokenColumns(t, ctx)
+	repo := NewSessionRepo(testDB, 5, speakerTestKey, time.UTC)
+
+	fixture := newSessionFixture(t, ctx, "2099-09-02", 480)
+
+	var roomID string
+	if err := testDB.QueryRow(ctx,
+		"INSERT INTO rooms (config_id, name) VALUES ($1, 'Untokened Hall') RETURNING id",
+		fixture.configID,
+	).Scan(&roomID); err != nil {
+		t.Fatalf("failed to insert room: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID) })
+
+	trackID := insertTrack(t, ctx, fixture.dayID, nil)
+	setColorToken(t, ctx, "tracks", trackID, "yellow")
+
+	var sessionID string
+	if err := testDB.QueryRow(ctx,
+		`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index, track_id, room_id)
+		 VALUES ($1, 'session', 'Track Coloured Session', 6, $2, 0, $3, $4) RETURNING id`,
+		fixture.configID, fixture.dayID, trackID, roomID,
+	).Scan(&sessionID); err != nil {
+		t.Fatalf("failed to insert session: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM sessions WHERE id = $1", sessionID) })
+
+	session, err := repo.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetSession returned error: %v", err)
+	}
+	if session.ColorToken != "yellow" {
+		t.Errorf("ColorToken = %q, want %q from tracks.color_token when the room has none", session.ColorToken, "yellow")
 	}
 }
 
-// insertRoomColor seeds the owned room_colors overlay for one room and cleans
-// it up afterwards.
-func insertRoomColor(t *testing.T, ctx context.Context, roomID, color string) {
+// requireColorTokenColumns skips a test that needs upstream 027's columns
+// against a database that predates it. The serving path degrades every session
+// to the default token there (see schemaCaps.colorTokenSQL), so asserting a
+// real token would be asserting the upstream revision, not this code.
+func requireColorTokenColumns(t *testing.T, ctx context.Context) {
+	t.Helper()
+	for _, table := range []string{"rooms", "tracks"} {
+		exists, err := columnExists(ctx, testDB, table, "color_token")
+		if err != nil {
+			t.Fatalf("probing %s.color_token: %v", table, err)
+		}
+		if !exists {
+			t.Skipf("%s.color_token is absent; apply agenda-organizer migration 027 to run this test", table)
+		}
+	}
+}
+
+// setColorToken puts a token on one rooms/tracks row. The column is nullable
+// upstream, so nothing needs undoing beyond the row's own cleanup.
+func setColorToken(t *testing.T, ctx context.Context, table, id, token string) {
 	t.Helper()
 	if _, err := testDB.Exec(ctx,
-		"INSERT INTO room_colors (room_id, color) VALUES ($1, $2)", roomID, color,
+		fmt.Sprintf("UPDATE %s SET color_token = $1 WHERE id = $2", table), token, id,
 	); err != nil {
-		t.Fatalf("failed to insert room_colors row: %v", err)
+		t.Fatalf("failed to set %s.color_token: %v", table, err)
 	}
-	t.Cleanup(func() {
-		_, _ = testDB.Exec(context.Background(), "DELETE FROM room_colors WHERE room_id = $1", roomID)
-	})
+}
+
+// insertTrack inserts a track on the given day, optionally in a room, and
+// cleans it up afterwards.
+//
+// tracks.color is NOT NULL where it still exists and gone once upstream 028 has
+// run, so the column list is built from what the database actually has rather
+// than hardcoded either way -- the same reason the serving path probes for
+// color_token. The hex it fills in is meaningless: nothing reads that column
+// any more.
+func insertTrack(t *testing.T, ctx context.Context, dayID string, roomID *string) string {
+	t.Helper()
+
+	columns := []string{"day_id", "position"}
+	values := []any{dayID, 0}
+	if roomID != nil {
+		columns = append(columns, "room_id")
+		values = append(values, *roomID)
+	}
+	hasHex, err := columnExists(ctx, testDB, "tracks", "color")
+	if err != nil {
+		t.Fatalf("probing tracks.color: %v", err)
+	}
+	if hasHex {
+		columns = append(columns, "color")
+		values = append(values, "#123abc")
+	}
+
+	placeholders := make([]string, len(columns))
+	for i := range columns {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+
+	var trackID string
+	if err := testDB.QueryRow(ctx, fmt.Sprintf(
+		"INSERT INTO tracks (%s) VALUES (%s) RETURNING id",
+		strings.Join(columns, ", "), strings.Join(placeholders, ", "),
+	), values...).Scan(&trackID); err != nil {
+		t.Fatalf("failed to insert track: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM tracks WHERE id = $1", trackID) })
+	return trackID
 }
 
 func TestSessionRepo_GetSession_Unscheduled(t *testing.T) {

@@ -190,18 +190,17 @@ func (r *EventRepo) GetEventAgendas(ctx context.Context, eventID string) ([]mode
 			        s.id, s.kind, s.title, s.description, %s,
 			        s.track_id, s.room_id, s.slot_index, s.duration_slots,
 			        s.article_url, s.article_label, s.video_url, s.video_label,
-			        t.color, r.name, rc.color, sec.label
+			        r.name, %s, sec.label
 			 FROM conference_days d
 			 JOIN conference_config cc ON cc.id = d.config_id
 			 LEFT JOIN sessions s ON s.day_id = d.id
 			 LEFT JOIN tracks t ON t.id = s.track_id
 			 LEFT JOIN rooms r ON r.id = s.room_id
-			 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
 			 LEFT JOIN track_sections sec ON sec.id = s.section_id
 			 %s
 			 WHERE d.config_id = $1
 			 ORDER BY d.day_index, s.slot_index`,
-			topicExpr, topicJoin,
+			topicExpr, r.caps.colorTokenSQL(ctx, r.pool), topicJoin,
 		),
 		configID,
 	)
@@ -223,14 +222,15 @@ func (r *EventRepo) GetEventAgendas(ctx context.Context, eventID string) ([]mode
 		var category, trackID, roomID *string
 		var slotIndex, durationSlots *int
 		var articleURL, articleLabel, videoURL, videoLabel *string
-		var trackColor, roomName, roomColor, trackGroup *string
+		var roomName, trackGroup *string
+		var colorToken string
 
 		if err := rows.Scan(
 			&dayID, &date, &label, &startMinute, &cfgTZ,
 			&sessionID, &kind, &title, &description, &category,
 			&trackID, &roomID, &slotIndex, &durationSlots,
 			&articleURL, &articleLabel, &videoURL, &videoLabel,
-			&trackColor, &roomName, &roomColor, &trackGroup,
+			&roomName, &colorToken, &trackGroup,
 		); err != nil {
 			return nil, err
 		}
@@ -291,14 +291,9 @@ func (r *EventRepo) GetEventAgendas(ctx context.Context, eventID string) ([]mode
 		if roomID != nil {
 			session.RoomID = *roomID
 		}
-		if trackColor != nil {
-			session.TrackColor = *trackColor
-		}
+		session.ColorToken = colorToken
 		if roomName != nil {
 			session.RoomName = *roomName
-		}
-		if roomColor != nil {
-			session.RoomColor = *roomColor
 		}
 		if trackGroup != nil {
 			session.TrackGroup = *trackGroup

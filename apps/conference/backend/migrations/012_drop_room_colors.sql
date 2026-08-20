@@ -1,0 +1,43 @@
+-- Copyright (c) 2026 WSO2 LLC. (https://www.wso2.com).
+--
+-- WSO2 LLC. licenses this file to you under the Apache License,
+-- Version 2.0 (the "License"); you may not use this file except
+-- in compliance with the License.
+-- You may obtain a copy of the License at
+--
+-- http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing,
+-- software distributed under the License is distributed on an
+-- "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+-- KIND, either express or implied.  See the License for the
+-- specific language governing permissions and limitations
+-- under the License.
+
+-- Drops the room_colors overlay (migration 010), whose own exit condition has
+-- now been met.
+--
+-- 010 existed because tracks.color covered only the rooms that have a track:
+-- every keynote and every break came back with no colour at all, and rooms sits
+-- in the shared marketingops schema this service does not own, so it could not
+-- add rooms.color itself. Its header said so outright: "An upstream request for
+-- rooms.color is filed in parallel; if it lands, this table collapses to a
+-- plain join and can be dropped."
+--
+-- It landed, as a token rather than a hex. The agenda-organizer repo's
+-- migration 027 adds rooms.color_token and tracks.color_token, and the backend
+-- now resolves a session's colour read-time as
+-- COALESCE(rooms.color_token, tracks.color_token, 'main') -- two plain joins it
+-- was already making. Nothing reads room_colors any more: the API publishes
+-- colorToken alone, and trackColor/roomColor are gone from the Session and
+-- SpeakerSession shapes.
+--
+-- PREREQUISITE: the agenda-organizer repo's 027_color_tokens.sql must be
+-- applied first, and this service must be running the token-reading code.
+-- Applying this file against a database without those columns is not a hard
+-- failure -- schemaCaps (internal/repository/schema.go) probes for them and
+-- degrades every session to the "main" token -- but the agenda would render
+-- uniformly grey until 027 catches up, which is a worse state than either end.
+--
+-- Idempotent: safe to re-run, and a no-op if 010 was never applied here.
+DROP TABLE IF EXISTS room_colors;

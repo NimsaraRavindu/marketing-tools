@@ -133,7 +133,8 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 	var s models.Session
 	var category, dayID, trackID, roomID *string
 	var articleURL, articleLabel, videoURL, videoLabel *string
-	var trackColor, roomName, roomColor, trackGroup, cfgTZ *string
+	var roomName, trackGroup, cfgTZ *string
+	var colorToken string
 	var slotIndex *int
 	var date *time.Time
 	var startMinute *int
@@ -145,24 +146,23 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 			`SELECT s.id, s.kind, s.title, s.description, %s,
 			        s.day_id, s.slot_index, s.duration_slots, s.track_id, s.room_id,
 			        s.article_url, s.article_label, s.video_url, s.video_label,
-			        d.date, d.start_minute, t.color, r.name, rc.color, sec.label, cc.timezone
+			        d.date, d.start_minute, r.name, %s, sec.label, cc.timezone
 			 FROM sessions s
 			 LEFT JOIN conference_days d ON s.day_id = d.id
 			 LEFT JOIN tracks t ON t.id = s.track_id
 			 LEFT JOIN rooms r ON r.id = s.room_id
-			 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
 			 LEFT JOIN track_sections sec ON sec.id = s.section_id
 			 LEFT JOIN conference_config cc ON cc.id = s.config_id
 			 %s
 			 WHERE s.id = $1`,
-			topicExpr, topicJoin,
+			topicExpr, r.caps.colorTokenSQL(ctx, r.pool), topicJoin,
 		),
 		id,
 	).Scan(
 		&s.ID, &s.Kind, &s.Title, &s.Description, &category,
 		&dayID, &slotIndex, &s.DurationSlots, &trackID, &roomID,
 		&articleURL, &articleLabel, &videoURL, &videoLabel,
-		&date, &startMinute, &trackColor, &roomName, &roomColor, &trackGroup, &cfgTZ,
+		&date, &startMinute, &roomName, &colorToken, &trackGroup, &cfgTZ,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -183,14 +183,9 @@ func (r *SessionRepo) GetSession(ctx context.Context, id string) (models.Session
 	if roomID != nil {
 		s.RoomID = *roomID
 	}
-	if trackColor != nil {
-		s.TrackColor = *trackColor
-	}
+	s.ColorToken = colorToken
 	if roomName != nil {
 		s.RoomName = *roomName
-	}
-	if roomColor != nil {
-		s.RoomColor = *roomColor
 	}
 	if trackGroup != nil {
 		s.TrackGroup = *trackGroup
@@ -245,18 +240,17 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 			`SELECT s.id, s.kind, s.title, s.description, %s,
 			        s.day_id, s.slot_index, s.duration_slots, s.track_id, s.room_id,
 			        s.article_url, s.article_label, s.video_url, s.video_label,
-			        d.date, d.start_minute, t.color, r.name, rc.color, sec.label, cc.timezone
+			        d.date, d.start_minute, r.name, %s, sec.label, cc.timezone
 			 FROM sessions s
 			 LEFT JOIN conference_days d ON s.day_id = d.id
 			 LEFT JOIN tracks t ON t.id = s.track_id
 			 LEFT JOIN rooms r ON r.id = s.room_id
-			 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
 			 LEFT JOIN track_sections sec ON sec.id = s.section_id
 			 LEFT JOIN conference_config cc ON cc.id = s.config_id
 			 %s
 			 WHERE s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC, id DESC LIMIT 1)
 			 ORDER BY d.date NULLS LAST, s.slot_index NULLS LAST, s.id`,
-			topicExpr, topicJoin,
+			topicExpr, r.caps.colorTokenSQL(ctx, r.pool), topicJoin,
 		),
 	)
 	if err != nil {
@@ -269,7 +263,8 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 		var s models.Session
 		var category, dayID, trackID, roomID *string
 		var articleURL, articleLabel, videoURL, videoLabel *string
-		var trackColor, roomName, roomColor, trackGroup, cfgTZ *string
+		var roomName, trackGroup, cfgTZ *string
+		var colorToken string
 		var slotIndex *int
 		var date *time.Time
 		var startMinute *int
@@ -278,7 +273,7 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 			&s.ID, &s.Kind, &s.Title, &s.Description, &category,
 			&dayID, &slotIndex, &s.DurationSlots, &trackID, &roomID,
 			&articleURL, &articleLabel, &videoURL, &videoLabel,
-			&date, &startMinute, &trackColor, &roomName, &roomColor, &trackGroup, &cfgTZ,
+			&date, &startMinute, &roomName, &colorToken, &trackGroup, &cfgTZ,
 		); err != nil {
 			return nil, err
 		}
@@ -295,14 +290,9 @@ func (r *SessionRepo) GetCurrentSessions(ctx context.Context) ([]models.Session,
 		if roomID != nil {
 			s.RoomID = *roomID
 		}
-		if trackColor != nil {
-			s.TrackColor = *trackColor
-		}
+		s.ColorToken = colorToken
 		if roomName != nil {
 			s.RoomName = *roomName
-		}
-		if roomColor != nil {
-			s.RoomColor = *roomColor
 		}
 		if trackGroup != nil {
 			s.TrackGroup = *trackGroup

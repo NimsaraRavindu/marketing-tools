@@ -18,6 +18,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -41,6 +42,13 @@ import (
 // once and shaping the SELECT accordingly means the agenda endpoints work
 // against every upstream revision from 018 through 025.
 //
+// The second capability is the same story one migration later: upstream 027
+// adds rooms.color_token/tracks.color_token, which every session, speaker and
+// agenda read now selects. Naming them against a database that predates 027
+// would 500 those reads outright, so an unprobed or absent column degrades to
+// the literal ColorTokenDefault -- the same value the COALESCE would have
+// produced for a row with no token anywhere.
+//
 // A failed probe degrades *that request only* to the safe form and stays
 // unresolved, so the next request retries. Memoizing a failure would turn a
 // one-off blip into a permanent, silent loss of the field for the lifetime of
@@ -56,6 +64,13 @@ type schemaCaps struct {
 	mu        sync.Mutex
 	resolved  bool
 	hasTopics bool
+
+	// Colour-token capability, resolved independently of the topic one: the
+	// two arrive in different upstream migrations, so a database can have
+	// either, both or neither.
+	colorResolved      bool
+	hasRoomColorToken  bool
+	hasTrackColorToken bool
 }
 
 // schemaProbeTimeout bounds a single capability probe. It is deliberately short:
@@ -139,4 +154,84 @@ func (c *schemaCaps) hasTopicID(ctx context.Context, pool *pgxpool.Pool) bool {
 
 	slog.Info("schema capability resolved", "table", "sessions", "column", "topic_id", "present", exists)
 	return exists
+}
+
+// colorTokenSQL returns the SELECT expression for a session's colour token --
+// the only colour field the API publishes.
+//
+// Upstream 027 puts the token on rooms and tracks and fixes the precedence:
+// COALESCE(rooms.color_token, tracks.color_token, 'main'). The colour belongs
+// to the room, the stable thing an attendee navigates by; the track is the
+// fallback for tracks that have no room. The expression assumes the caller's
+// query already aliases rooms as r and tracks as t, which all four colour-
+// reading queries do.
+//
+// Each column is folded in only if it is actually there, so a database at any
+// point of the 027 rollout -- neither column, or one of them if the ALTERs are
+// applied separately -- gets a valid query rather than a 500. With neither, the
+// expression is the literal default: every session comes back "main", which is
+// exactly what a client renders for a row that has no token upstream either.
+func (c *schemaCaps) colorTokenSQL(ctx context.Context, pool *pgxpool.Pool) string {
+	return colorTokenExpr(c.colorTokenColumns(ctx, pool))
+}
+
+// colorTokenExpr builds the expression for a given pair of capabilities. Split
+// out from the probe so the precedence it encodes -- room, then track, then the
+// default -- is testable without a database.
+func colorTokenExpr(room, track bool) string {
+	switch {
+	case room && track:
+		return fmt.Sprintf("COALESCE(r.color_token, t.color_token, '%s')", ColorTokenDefault)
+	case room:
+		return fmt.Sprintf("COALESCE(r.color_token, '%s')", ColorTokenDefault)
+	case track:
+		return fmt.Sprintf("COALESCE(t.color_token, '%s')", ColorTokenDefault)
+	default:
+		return fmt.Sprintf("'%s'::text", ColorTokenDefault)
+	}
+}
+
+// colorTokenColumns reports whether rooms.color_token and tracks.color_token
+// exist, probing at most once successfully and retrying on every request until
+// it gets an answer.
+//
+// Same lifetime rules as hasTopicID, for the same reasons: the probe runs
+// detached from the caller's context so one request cannot decide a
+// process-wide fact by disconnecting mid-probe, the lock is not held across the
+// query, and only an answered probe is cached so a transient failure costs one
+// request's colour rather than every request until the process restarts.
+//
+// Both columns are probed under one resolved flag because 027 adds them
+// together; two round trips on a cold cache is the price of not inventing a
+// second caching scheme for a fact that always moves as a pair.
+func (c *schemaCaps) colorTokenColumns(ctx context.Context, pool *pgxpool.Pool) (room, track bool) {
+	c.mu.Lock()
+	if c.colorResolved {
+		defer c.mu.Unlock()
+		return c.hasRoomColorToken, c.hasTrackColorToken
+	}
+	c.mu.Unlock()
+
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), schemaProbeTimeout)
+	defer cancel()
+
+	room, err := columnExists(probeCtx, pool, "rooms", "color_token")
+	if err == nil {
+		track, err = columnExists(probeCtx, pool, "tracks", "color_token")
+	}
+	if err != nil {
+		// Serve this request with the default token and leave the capability
+		// unresolved, so the next request re-probes.
+		slog.Warn("schema capability probe failed, serving degraded",
+			"table", "rooms/tracks", "column", "color_token", "error", err)
+		return false, false
+	}
+
+	c.mu.Lock()
+	c.colorResolved, c.hasRoomColorToken, c.hasTrackColorToken = true, room, track
+	c.mu.Unlock()
+
+	slog.Info("schema capability resolved", "table", "rooms/tracks", "column", "color_token",
+		"rooms", room, "tracks", track)
+	return room, track
 }

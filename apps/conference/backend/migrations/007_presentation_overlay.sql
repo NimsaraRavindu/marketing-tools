@@ -24,8 +24,14 @@
 -- sessions/speakers tables -- same no-FK-to-read-only-tables precedent as
 -- feedback and user_connection.
 --
--- Track colour is deliberately NOT here: tracks.color already exists upstream
--- with real data, so it's a plain join, not an overlay (see PROGRESS Step 0).
+-- Colour is deliberately NOT here: it exists upstream with real data, so it's
+-- a plain join, not an overlay (see PROGRESS Step 0). That was true of
+-- tracks.color when this was written and stays true of its replacement --
+-- agenda-organizer's migration 027 moved the colour to
+-- rooms.color_token/tracks.color_token, which the session reads resolve with
+-- COALESCE(rooms.color_token, tracks.color_token, 'main'). (The room_colors
+-- overlay, migration 010, was the one colour overlay this service did own, and
+-- 012 drops it for the same reason.)
 -- An upstream request for session_speakers.role='moderator' is filed in
 -- parallel; if it lands, this table collapses to a plain join and can be
 -- dropped.

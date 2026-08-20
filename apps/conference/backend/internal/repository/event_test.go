@@ -354,11 +354,13 @@ func TestEventRepo_GetEventAgendas_NestedSessionTimeWindowMatchesGetSession(t *t
 	}
 }
 
-// A keynote or break has no track, so tracks.color leaves it colourless. The
-// room_colors overlay is what gives it a colour, and this is the case the
-// agendas endpoint was actually missing.
-func TestEventRepo_GetEventAgendas_TracklessSessionStillGetsRoomColor(t *testing.T) {
+// 16 of 18 keynotes and every break sit on no track, so a colour read off
+// tracks alone leaves them colourless -- which is exactly why upstream 027 put
+// the token on the room and made the track the fallback. A trackless but roomed
+// session must come back with its room's token.
+func TestEventRepo_GetEventAgendas_TracklessSessionGetsRoomColorToken(t *testing.T) {
 	ctx := context.Background()
+	requireColorTokenColumns(t, ctx)
 	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 
 	fixture := newEventFixture(t, ctx, "TDD Room Colour Conference", "2301-01-01")
@@ -372,8 +374,7 @@ func TestEventRepo_GetEventAgendas_TracklessSessionStillGetsRoomColor(t *testing
 		t.Fatalf("failed to insert room: %v", err)
 	}
 	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID) })
-
-	insertRoomColor(t, ctx, roomID, "#08BAF6")
+	setColorToken(t, ctx, "rooms", roomID, "blue")
 
 	var sessionID string
 	if err := testDB.QueryRow(ctx,
@@ -392,18 +393,109 @@ func TestEventRepo_GetEventAgendas_TracklessSessionStillGetsRoomColor(t *testing
 	if len(agendas) != 1 || len(agendas[0].Sessions) != 1 {
 		t.Fatalf("agendas = %+v, want one day with one session", agendas)
 	}
-	nested := agendas[0].Sessions[0]
-
-	if nested.RoomColor != "#08BAF6" {
-		t.Errorf("RoomColor = %q, want %q (from room_colors.color)", nested.RoomColor, "#08BAF6")
-	}
-	if nested.TrackColor != "" {
-		t.Errorf("TrackColor = %q, want empty for a session with no track", nested.TrackColor)
+	if got := agendas[0].Sessions[0].ColorToken; got != "blue" {
+		t.Errorf("ColorToken = %q, want %q (from rooms.color_token) for a trackless but roomed session", got, "blue")
 	}
 }
 
-func TestEventRepo_GetEventAgendas_RoomWithNoOverlayRowHasNoRoomColor(t *testing.T) {
+// A session with neither room nor track has no token anywhere, and the last arm
+// of the COALESCE has to answer for it. It resolves to the default rather than
+// to an empty string, so colorToken is always safe to index a client-side map
+// with and the client never special-cases an absent field.
+//
+// This is also the shape every session takes against a database below upstream
+// 027, which is what makes it worth asserting unconditionally: it needs no
+// color_token column to hold.
+func TestEventRepo_GetEventAgendas_UnroomedUntrackedSessionsGetTheDefaultToken(t *testing.T) {
 	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	fixture := newEventFixture(t, ctx, "TDD Kind Fallback Conference", "2303-01-01")
+	dayID := fixture.insertDay(t, ctx, 0, "2303-01-01", "Day 1", 480)
+
+	// No track_id and no room_id: nothing upstream can colour these.
+	insert := func(kind, title string, slot int) {
+		var sessionID string
+		if err := testDB.QueryRow(ctx,
+			`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index)
+			 VALUES ($1, $2, $3, 6, $4, $5) RETURNING id`,
+			fixture.configID, kind, title, dayID, slot,
+		).Scan(&sessionID); err != nil {
+			t.Fatalf("failed to insert %s: %v", kind, err)
+		}
+		t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM sessions WHERE id = $1", sessionID) })
+	}
+	insert("keynote", "TDD Unroomed Keynote", 0)
+	insert("break", "TDD Unroomed Break", 6)
+
+	agendas, err := repo.GetEventAgendas(ctx, fixture.configID)
+	if err != nil {
+		t.Fatalf("GetEventAgendas returned error: %v", err)
+	}
+	if len(agendas) != 1 || len(agendas[0].Sessions) != 2 {
+		t.Fatalf("agendas = %+v, want one day with two sessions", agendas)
+	}
+
+	for _, s := range agendas[0].Sessions {
+		if got := s.ColorToken; got != ColorTokenDefault {
+			t.Errorf("%s ColorToken = %q, want %q", s.Kind, got, ColorTokenDefault)
+		}
+	}
+}
+
+// The precedence upstream 027 fixed, asserted on a session that has both: the
+// room's token wins. This is the reverse of the hex chain it replaced, where
+// the track came first -- the room is the stable thing an attendee navigates
+// by, and the track is one column on one day.
+func TestEventRepo_GetEventAgendas_RoomColorTokenWinsOverTrack(t *testing.T) {
+	ctx := context.Background()
+	requireColorTokenColumns(t, ctx)
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	fixture := newEventFixture(t, ctx, "TDD Track Precedence Conference", "2304-01-01")
+	dayID := fixture.insertDay(t, ctx, 0, "2304-01-01", "Day 1", 480)
+
+	var roomID string
+	if err := testDB.QueryRow(ctx,
+		"INSERT INTO rooms (config_id, name) VALUES ($1, 'TDD Precedence Room') RETURNING id",
+		fixture.configID,
+	).Scan(&roomID); err != nil {
+		t.Fatalf("failed to insert room: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID) })
+	setColorToken(t, ctx, "rooms", roomID, "blue")
+
+	trackID := insertTrack(t, ctx, dayID, &roomID)
+	setColorToken(t, ctx, "tracks", trackID, "red")
+
+	// A keynote with a token on both sides: the room's must win.
+	var sessionID string
+	if err := testDB.QueryRow(ctx,
+		`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index, room_id, track_id)
+		 VALUES ($1, 'keynote', 'TDD Tracked Keynote', 6, $2, 0, $3, $4) RETURNING id`,
+		fixture.configID, dayID, roomID, trackID,
+	).Scan(&sessionID); err != nil {
+		t.Fatalf("failed to insert session: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM sessions WHERE id = $1", sessionID) })
+
+	agendas, err := repo.GetEventAgendas(ctx, fixture.configID)
+	if err != nil {
+		t.Fatalf("GetEventAgendas returned error: %v", err)
+	}
+	if len(agendas) != 1 || len(agendas[0].Sessions) != 1 {
+		t.Fatalf("agendas = %+v, want one day with one session", agendas)
+	}
+	if got := agendas[0].Sessions[0].ColorToken; got != "blue" {
+		t.Errorf("ColorToken = %q, want the room's %q to win over the track's", got, "blue")
+	}
+}
+
+// A room with no token of its own is not the end of the chain: the session
+// falls through to its track, and only then to the default.
+func TestEventRepo_GetEventAgendas_UntokenedRoomFallsThroughToTrack(t *testing.T) {
+	ctx := context.Background()
+	requireColorTokenColumns(t, ctx)
 	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
 
 	fixture := newEventFixture(t, ctx, "TDD Uncoloured Room Conference", "2302-01-01")
@@ -418,11 +510,14 @@ func TestEventRepo_GetEventAgendas_RoomWithNoOverlayRowHasNoRoomColor(t *testing
 	}
 	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID) })
 
+	trackID := insertTrack(t, ctx, dayID, &roomID)
+	setColorToken(t, ctx, "tracks", trackID, "green")
+
 	var sessionID string
 	if err := testDB.QueryRow(ctx,
-		`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index, room_id)
-		 VALUES ($1, 'break', 'TDD Uncoloured Break', 6, $2, 0, $3) RETURNING id`,
-		fixture.configID, dayID, roomID,
+		`INSERT INTO sessions (config_id, kind, title, duration_slots, day_id, slot_index, room_id, track_id)
+		 VALUES ($1, 'break', 'TDD Uncoloured Break', 6, $2, 0, $3, $4) RETURNING id`,
+		fixture.configID, dayID, roomID, trackID,
 	).Scan(&sessionID); err != nil {
 		t.Fatalf("failed to insert session: %v", err)
 	}
@@ -435,8 +530,8 @@ func TestEventRepo_GetEventAgendas_RoomWithNoOverlayRowHasNoRoomColor(t *testing
 	if len(agendas) != 1 || len(agendas[0].Sessions) != 1 {
 		t.Fatalf("agendas = %+v, want one day with one session", agendas)
 	}
-	if got := agendas[0].Sessions[0].RoomColor; got != "" {
-		t.Errorf("RoomColor = %q, want empty for a room with no overlay row", got)
+	if got := agendas[0].Sessions[0].ColorToken; got != "green" {
+		t.Errorf("ColorToken = %q, want the track's %q when the room has no token", got, "green")
 	}
 }
 
@@ -450,14 +545,7 @@ func TestEventRepo_GetEventAgendas_ResolvesTrackGroupForBothSectionKinds(t *test
 	fixture := newEventFixture(t, ctx, "TDD Track Group Conference", "2303-01-01")
 	dayID := fixture.insertDay(t, ctx, 0, "2303-01-01", "Day 1", 480)
 
-	var trackID string
-	if err := testDB.QueryRow(ctx,
-		"INSERT INTO tracks (day_id, color, position) VALUES ($1, '#123abc', 0) RETURNING id",
-		dayID,
-	).Scan(&trackID); err != nil {
-		t.Fatalf("failed to insert track: %v", err)
-	}
-	t.Cleanup(func() { _, _ = testDB.Exec(context.Background(), "DELETE FROM tracks WHERE id = $1", trackID) })
+	trackID := insertTrack(t, ctx, dayID, nil)
 
 	var trackSectionID string
 	if err := testDB.QueryRow(ctx,
