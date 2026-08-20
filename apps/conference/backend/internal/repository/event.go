@@ -56,6 +56,31 @@ func NewEventRepo(pool *pgxpool.Pool, slotMinutes int, loc *time.Location, venue
 	return &EventRepo{pool: pool, slotMinutes: slotMinutes, loc: loc, venueTZ: venueTZ}
 }
 
+// eventDateCols selects the two date bounds every Event carries. start_date is
+// a real column; there is no end_date one, so the end of the conference is the
+// last day the content team entered for it.
+//
+// The COALESCE is what keeps EndDate non-empty for a conference whose days are
+// not entered yet: MAX over no rows is NULL, and start_date stands in. Postgres
+// GREATEST happens to skip NULLs too, but spelling the fallback out does not
+// depend on that -- a reader expecting SQL's usual NULL propagation reads this
+// correctly either way. GREATEST then clamps the case where the days were
+// entered before a wrong start_date was corrected, so EndDate >= StartDate
+// always holds.
+const eventDateCols = `cc.start_date,
+	        GREATEST(cc.start_date, COALESCE(
+	            (SELECT MAX(d.date) FROM conference_days d WHERE d.config_id = cc.id),
+	            cc.start_date))`
+
+// formatEventDates fills in the two date bounds, matching the YYYY-MM-DD shape
+// EventAgenda.Date already uses. Both columns are DATE, so there is no
+// timezone conversion to do here -- they are venue-local calendar dates by
+// construction.
+func formatEventDates(e *models.Event, startDate, endDate time.Time) {
+	e.StartDate = startDate.Format("2006-01-02")
+	e.EndDate = endDate.Format("2006-01-02")
+}
+
 // GetEvents returns every conference_config row, ordered by start_date
 // descending. IsCurrent is true only for the first (latest) row -- there is
 // no stored "current" flag, so this reuses the "current = latest start_date"
@@ -69,7 +94,9 @@ func NewEventRepo(pool *pgxpool.Pool, slotMinutes int, loc *time.Location, venue
 // returned another.
 func (r *EventRepo) GetEvents(ctx context.Context) ([]models.Event, error) {
 	rows, err := r.pool.Query(ctx,
-		"SELECT id, name, timezone, venue_name, venue_address FROM conference_config ORDER BY start_date DESC, id DESC",
+		`SELECT cc.id, cc.name, cc.timezone, cc.venue_name, cc.venue_address, `+eventDateCols+`
+		 FROM conference_config cc
+		 ORDER BY cc.start_date DESC, cc.id DESC`,
 	)
 	if err != nil {
 		return nil, err
@@ -81,9 +108,11 @@ func (r *EventRepo) GetEvents(ctx context.Context) ([]models.Event, error) {
 		var e models.Event
 		var tz string
 		var venueName, venueAddress *string
-		if err := rows.Scan(&e.ID, &e.Name, &tz, &venueName, &venueAddress); err != nil {
+		var startDate, endDate time.Time
+		if err := rows.Scan(&e.ID, &e.Name, &tz, &venueName, &venueAddress, &startDate, &endDate); err != nil {
 			return nil, err
 		}
+		formatEventDates(&e, startDate, endDate)
 		e.IsCurrent = len(events) == 0
 		// The conference_config.timezone column is the source of truth; the
 		// env-configured venueTZ is only a fallback for an empty value.
@@ -124,13 +153,14 @@ func (r *EventRepo) GetCurrentEvent(ctx context.Context) (models.Event, error) {
 	var e models.Event
 	var tz string
 	var venueName, venueAddress *string
+	var startDate, endDate time.Time
 
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, name, timezone, venue_name, venue_address
-		 FROM conference_config
-		 ORDER BY start_date DESC, id DESC
+		`SELECT cc.id, cc.name, cc.timezone, cc.venue_name, cc.venue_address, `+eventDateCols+`
+		 FROM conference_config cc
+		 ORDER BY cc.start_date DESC, cc.id DESC
 		 LIMIT 1`,
-	).Scan(&e.ID, &e.Name, &tz, &venueName, &venueAddress)
+	).Scan(&e.ID, &e.Name, &tz, &venueName, &venueAddress, &startDate, &endDate)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return models.Event{}, ErrNotFound
@@ -139,6 +169,7 @@ func (r *EventRepo) GetCurrentEvent(ctx context.Context) (models.Event, error) {
 	}
 
 	e.IsCurrent = true
+	formatEventDates(&e, startDate, endDate)
 	// conference_config.timezone is the source of truth; the env-configured
 	// venueTZ is only a fallback for an empty value.
 	e.Timezone = tz

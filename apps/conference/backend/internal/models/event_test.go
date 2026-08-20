@@ -34,7 +34,7 @@ func TestEvent_JSONShape(t *testing.T) {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
 
-	for _, key := range []string{"id", "name", "isCurrent", "timezone"} {
+	for _, key := range []string{"id", "name", "isCurrent", "timezone", "startDate", "endDate"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("expected JSON key %q, got keys %v", key, got)
 		}
@@ -62,6 +62,32 @@ func TestEvent_VenueFields(t *testing.T) {
 	}
 	if _, ok := got["venueAddress"]; ok {
 		t.Errorf("venueAddress should be omitted when empty, got %v", got)
+	}
+}
+
+// The date bounds carry no omitempty: a client formatting "Sep 1-3, 2026" needs
+// both keys present even for a conference whose days are not entered yet, where
+// the repository reports startDate twice rather than dropping endDate.
+func TestEvent_DateBoundsAlwaysPresent(t *testing.T) {
+	b, err := json.Marshal(Event{ID: "e1", Name: "N", Timezone: "UTC"})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	for _, key := range []string{"startDate", "endDate"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("%q must be emitted even when empty, got %v", key, got)
+		}
+	}
+
+	b, _ = json.Marshal(Event{ID: "e1", Name: "N", Timezone: "UTC", StartDate: "2026-09-01", EndDate: "2026-09-03"})
+	got = map[string]any{}
+	_ = json.Unmarshal(b, &got)
+	if got["startDate"] != "2026-09-01" || got["endDate"] != "2026-09-03" {
+		t.Errorf("date bounds = %v / %v, want 2026-09-01 / 2026-09-03", got["startDate"], got["endDate"])
 	}
 }
 
