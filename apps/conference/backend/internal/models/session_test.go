@@ -40,7 +40,7 @@ func TestSession_JSONShape(t *testing.T) {
 		SlotIndex:     &slotIndex,
 		DurationSlots: 6,
 		RoomID:        "room-1",
-		RoomColor:     "#08BAF6",
+		ColorToken:    "blue",
 		TrackGroup:    "Case Studies",
 		ArticleURL:    "https://example.com/article",
 		ArticleLabel:  "Slides",
@@ -60,14 +60,16 @@ func TestSession_JSONShape(t *testing.T) {
 
 	for _, key := range []string{
 		"id", "kind", "title", "description", "category", "startTime", "endTime",
-		"dayId", "trackId", "trackGroup", "slotIndex", "durationSlots", "roomId", "roomColor",
+		"dayId", "trackId", "trackGroup", "slotIndex", "durationSlots", "roomId", "colorToken",
 		"articleUrl", "articleLabel", "videoUrl", "videoLabel",
 	} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("expected JSON key %q, got keys %v", key, got)
 		}
 	}
-	for _, key := range []string{"agendaId", "venueId", "locationId", "isFeedbackNotified", "youtubeLink", "slidesLink", "pdfLink"} {
+	// trackColor/roomColor were the hex colour fields; the API publishes only
+	// colorToken now (see repository/session_color.go).
+	for _, key := range []string{"agendaId", "venueId", "locationId", "isFeedbackNotified", "youtubeLink", "slidesLink", "pdfLink", "trackColor", "roomColor"} {
 		if _, ok := got[key]; ok {
 			t.Errorf("expected no %q key (dropped, no equivalent in new schema), got %v", key, got)
 		}
@@ -89,7 +91,7 @@ func TestSession_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 
 	for _, key := range []string{
 		"description", "category", "startTime", "endTime", "dayId", "trackId", "trackGroup", "slotIndex",
-		"roomId", "roomColor", "articleUrl", "articleLabel", "videoUrl", "videoLabel",
+		"roomId", "articleUrl", "articleLabel", "videoUrl", "videoLabel",
 	} {
 		if _, ok := got[key]; ok {
 			t.Errorf("expected %q to be omitted when empty/unscheduled, got %v", key, got)

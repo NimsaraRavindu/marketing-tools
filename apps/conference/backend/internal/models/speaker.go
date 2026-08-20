@@ -47,13 +47,16 @@ type SpeakerSession struct {
 	Title     string     `json:"title"`
 	StartTime *time.Time `json:"startTime,omitempty"`
 	EndTime   *time.Time `json:"endTime,omitempty"`
-	// RoomName, TrackColor and RoomColor mirror the same fields on Session so a
-	// speaker's session list renders the same room label and colour as the
-	// agenda, without a second fetch. Each is omitted when the session has no
-	// room / no track / no overlay row for its room.
-	RoomName   string `json:"roomName,omitempty"`
-	TrackColor string `json:"trackColor,omitempty"`
-	RoomColor  string `json:"roomColor,omitempty"`
+	// RoomName mirrors Session.RoomName so a speaker's session list renders the
+	// same room label as the agenda, without a second fetch. Omitted when the
+	// session has no room.
+	RoomName string `json:"roomName,omitempty"`
+	// ColorToken mirrors Session.ColorToken: the name of the session's colour
+	// for a client that owns the values per light/dark appearance, resolved by
+	// the same room -> track -> "main" chain, so this screen and the agenda
+	// agree on a session's colour. Always present, defaulting to
+	// repository.ColorTokenDefault.
+	ColorToken string `json:"colorToken"`
 }
 
 // SpeakerSummary represents one entry of GET /speakers: what a row in the

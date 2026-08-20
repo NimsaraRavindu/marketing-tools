@@ -425,7 +425,7 @@ components:
   schemas:
     Session:
       type: object
-      required: [id, kind, title, durationSlots]
+      required: [id, kind, title, durationSlots, colorToken]
       properties:
         id: { type: string, format: uuid }
         kind: { type: string, description: "keynote | session | break | activity" }
@@ -442,12 +442,18 @@ components:
         endTime: { type: string, format: date-time }
         dayId: { type: string, format: uuid }
         trackId: { type: string, format: uuid }
-        trackColor:
+        colorToken:
           type: string
+          enum: [red, yellow, green, blue, purple, dark-blue, main]
           description: >-
-            Hex colour of the session's track (tracks.color), e.g. "#2faf5a".
-            Absent when the session has no track — keynotes and breaks
-            typically have none. Use roomColor for those.
+            Names which colour the session is, without saying what that colour
+            looks like — the client owns the seven values and can define a
+            different one per light/dark appearance. This is the only colour
+            field the API publishes; the trackColor/roomColor hexes it replaced
+            were each one fixed value a theme could not reinterpret. Resolved
+            server-side as the session's room colour, else its track colour,
+            else "main" — the room owns the colour, the track is the fallback.
+            Always present: a session with no colour on either lands on "main".
         trackGroup:
           type: string
           description: >-
@@ -459,13 +465,6 @@ components:
         durationSlots: { type: integer }
         roomId: { type: string, format: uuid }
         roomName: { type: string }
-        roomColor:
-          type: string
-          description: >-
-            Hex colour of the session's room, e.g. "#08BAF6". Covers every room
-            including the ones with no track, so this is the field to colour a
-            session card by; together with roomName it replaces the FE
-            ROOM_COLOR_MAP. Absent when the session has no room.
         articleUrl: { type: string }
         articleLabel: { type: string }
         videoUrl: { type: string }
@@ -552,23 +551,21 @@ components:
         photoUrl: { type: string }
     SpeakerSession:
       type: object
-      required: [id, title]
+      required: [id, title, colorToken]
       properties:
         id: { type: string, format: uuid }
         title: { type: string }
         startTime: { type: string, format: date-time }
         endTime: { type: string, format: date-time }
         roomName: { type: string, description: "Absent when the session has no room." }
-        trackColor:
+        colorToken:
           type: string
+          enum: [red, yellow, green, blue, purple, dark-blue, main]
           description: >-
-            Hex colour of the session's track, e.g. "#2faf5a". Absent when the
-            session has no track — keynotes and breaks typically have none.
-        roomColor:
-          type: string
-          description: >-
-            Hex colour of the session's room, e.g. "#08BAF6". Mirrors
-            Session.roomColor. Absent when the session has no room.
+            Mirrors Session.colorToken exactly — the name of the session's
+            colour, resolved by the same room → track → "main" chain, so a
+            session shows the same colour on the speaker screen as on the
+            agenda. Always present.
     AttendeeSearchResult:
       type: object
       required: [items, page]

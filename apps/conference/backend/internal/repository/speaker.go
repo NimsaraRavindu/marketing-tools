@@ -40,6 +40,9 @@ type SpeakerRepo struct {
 	piiKey      []byte
 	slotMinutes int
 	loc         *time.Location
+	// caps shapes the colour-token SELECT against whatever upstream revision
+	// the shared schema is actually at (see schema.go).
+	caps schemaCaps
 }
 
 // NewSpeakerRepo constructs a SpeakerRepo backed by the given pool, decrypting
@@ -112,17 +115,19 @@ func (r *SpeakerRepo) GetSpeaker(ctx context.Context, id string) (models.Speaker
 // sessions.
 func (r *SpeakerRepo) fetchSpeakerSessions(ctx context.Context, speakerID string) ([]models.SpeakerSession, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT s.id, s.title, s.slot_index, s.duration_slots,
-		        d.date, d.start_minute, cc.timezone, r.name, t.color, rc.color
-		 FROM session_speakers ss
-		 JOIN sessions s ON s.id = ss.session_id
-		 LEFT JOIN conference_days d ON d.id = s.day_id
-		 LEFT JOIN conference_config cc ON cc.id = s.config_id
-		 LEFT JOIN rooms r ON r.id = s.room_id
-		 LEFT JOIN tracks t ON t.id = s.track_id
-		 LEFT JOIN room_colors rc ON rc.room_id = s.room_id
-		 WHERE ss.speaker_id = $1
-		   AND s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC, id DESC LIMIT 1)`,
+		fmt.Sprintf(
+			`SELECT s.id, s.title, s.slot_index, s.duration_slots,
+			        d.date, d.start_minute, cc.timezone, r.name, %s
+			 FROM session_speakers ss
+			 JOIN sessions s ON s.id = ss.session_id
+			 LEFT JOIN conference_days d ON d.id = s.day_id
+			 LEFT JOIN conference_config cc ON cc.id = s.config_id
+			 LEFT JOIN rooms r ON r.id = s.room_id
+			 LEFT JOIN tracks t ON t.id = s.track_id
+			 WHERE ss.speaker_id = $1
+			   AND s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC, id DESC LIMIT 1)`,
+			r.caps.colorTokenSQL(ctx, r.pool),
+		),
 		speakerID,
 	)
 	if err != nil {
@@ -132,25 +137,19 @@ func (r *SpeakerRepo) fetchSpeakerSessions(ctx context.Context, speakerID string
 
 	sessions := make([]models.SpeakerSession, 0)
 	for rows.Next() {
-		var sessionID, title string
-		var cfgTZ, roomName, trackColor, roomColor *string
+		var sessionID, title, colorToken string
+		var cfgTZ, roomName *string
 		var slotIndex, durationSlots, startMinute *int
 		var date *time.Time
 
 		if err := rows.Scan(&sessionID, &title, &slotIndex, &durationSlots,
-			&date, &startMinute, &cfgTZ, &roomName, &trackColor, &roomColor); err != nil {
+			&date, &startMinute, &cfgTZ, &roomName, &colorToken); err != nil {
 			return nil, err
 		}
 
-		sess := models.SpeakerSession{ID: sessionID, Title: title}
+		sess := models.SpeakerSession{ID: sessionID, Title: title, ColorToken: colorToken}
 		if roomName != nil {
 			sess.RoomName = *roomName
-		}
-		if trackColor != nil {
-			sess.TrackColor = *trackColor
-		}
-		if roomColor != nil {
-			sess.RoomColor = *roomColor
 		}
 		if slotIndex != nil && durationSlots != nil && date != nil && startMinute != nil {
 			start, end := computeSessionWindow(*date, *startMinute, *slotIndex, *durationSlots, r.slotMinutes, resolveLoc(cfgTZ, r.loc))

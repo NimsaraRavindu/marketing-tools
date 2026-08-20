@@ -79,12 +79,15 @@ func newSpeakerFixture(t *testing.T, ctx context.Context, name, title, bio, phot
 	return &speakerFixture{speakerID: speakerID}
 }
 
-// Room name and track colour the fixture session is placed in, asserted by
-// TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions.
+// Room name and colour token the fixture session is placed in, asserted by
+// TestSpeakerRepo_GetSpeakerSummary_ScopedByEventEmbedsResolvedSessions. The
+// room and its track carry different tokens so the assertion also pins the
+// precedence: the room wins.
 const (
-	testSpeakerRoomName   = "TDD Speaker Test Room"
-	testSpeakerTrackColor = "#123456"
-	testSpeakerRoomColor  = "#abcdef"
+	testSpeakerRoomName      = "TDD Speaker Test Room"
+	testSpeakerRoomToken     = "purple"
+	testSpeakerTrackToken    = "dark-blue"
+	testSpeakerFallbackToken = ColorTokenDefault
 )
 
 // attachToSession creates a minimal conference_config + room + track +
@@ -120,7 +123,7 @@ func (f *speakerFixture) attachToSession(t *testing.T, ctx context.Context) (ses
 		t.Fatalf("failed to insert test room: %v", err)
 	}
 
-	insertRoomColor(t, ctx, roomID, testSpeakerRoomColor)
+	setColorTokenIfSupported(t, ctx, "rooms", roomID, testSpeakerRoomToken)
 
 	var dayID string
 	err = testDB.QueryRow(ctx,
@@ -131,14 +134,8 @@ func (f *speakerFixture) attachToSession(t *testing.T, ctx context.Context) (ses
 		t.Fatalf("failed to insert test conference_day: %v", err)
 	}
 
-	var trackID string
-	err = testDB.QueryRow(ctx,
-		"INSERT INTO tracks (day_id, room_id, color) VALUES ($1, $2, $3) RETURNING id",
-		dayID, roomID, testSpeakerTrackColor,
-	).Scan(&trackID)
-	if err != nil {
-		t.Fatalf("failed to insert test track: %v", err)
-	}
+	trackID := insertTrack(t, ctx, dayID, &roomID)
+	setColorTokenIfSupported(t, ctx, "tracks", trackID, testSpeakerTrackToken)
 
 	err = testDB.QueryRow(ctx,
 		`INSERT INTO sessions (config_id, kind, title, room_id, track_id)
@@ -286,11 +283,8 @@ func TestSpeakerRepo_GetSpeaker_EmbedsResolvedSessions(t *testing.T) {
 	if sess.RoomName != testSpeakerRoomName {
 		t.Errorf("session roomName = %q, want %q", sess.RoomName, testSpeakerRoomName)
 	}
-	if sess.TrackColor != testSpeakerTrackColor {
-		t.Errorf("session trackColor = %q, want %q", sess.TrackColor, testSpeakerTrackColor)
-	}
-	if sess.RoomColor != testSpeakerRoomColor {
-		t.Errorf("session roomColor = %q, want %q", sess.RoomColor, testSpeakerRoomColor)
+	if want := wantSpeakerFixtureToken(t, ctx); sess.ColorToken != want {
+		t.Errorf("session colorToken = %q, want %q", sess.ColorToken, want)
 	}
 }
 
@@ -371,22 +365,55 @@ func TestSpeakerRepo_GetSpeaker_OmitsRoomAndColourWhenSessionHasNeither(t *testi
 	if sess.RoomName != "" {
 		t.Errorf("roomName = %q, want empty for a session with no room", sess.RoomName)
 	}
-	if sess.TrackColor != "" {
-		t.Errorf("trackColor = %q, want empty for a session with no track", sess.TrackColor)
-	}
-	if sess.RoomColor != "" {
-		t.Errorf("roomColor = %q, want empty for a session with no room", sess.RoomColor)
+	// No room and no track means no token anywhere, so the last arm of the
+	// COALESCE answers -- the field is present, never empty.
+	if sess.ColorToken != ColorTokenDefault {
+		t.Errorf("colorToken = %q, want %q for a session with neither room nor track", sess.ColorToken, ColorTokenDefault)
 	}
 
 	encoded, err := json.Marshal(sess)
 	if err != nil {
 		t.Fatalf("marshalling session: %v", err)
 	}
+	if !bytes.Contains(encoded, []byte(`"colorToken"`)) {
+		t.Errorf("colorToken should always be present, got %s", encoded)
+	}
+	// The hex fields the token replaced must not have come back.
 	for _, key := range []string{"roomName", "trackColor", "roomColor"} {
 		if bytes.Contains(encoded, []byte(key)) {
-			t.Errorf("%s should be omitted from JSON when empty, got %s", key, encoded)
+			t.Errorf("%s should be absent from the JSON, got %s", key, encoded)
 		}
 	}
+}
+
+// setColorTokenIfSupported sets a token where upstream 027 has been applied and
+// is a no-op otherwise, so a fixture used by tests that say nothing about
+// colour still builds against an older database.
+func setColorTokenIfSupported(t *testing.T, ctx context.Context, table, id, token string) {
+	t.Helper()
+	exists, err := columnExists(ctx, testDB, table, "color_token")
+	if err != nil {
+		t.Fatalf("probing %s.color_token: %v", table, err)
+	}
+	if exists {
+		setColorToken(t, ctx, table, id, token)
+	}
+}
+
+// wantSpeakerFixtureToken is the token the fixture session resolves to: the
+// room's where upstream 027 has been applied, and the default where it has not
+// -- which is what the serving path degrades to there (see
+// schemaCaps.colorTokenSQL).
+func wantSpeakerFixtureToken(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	exists, err := columnExists(ctx, testDB, "rooms", "color_token")
+	if err != nil {
+		t.Fatalf("probing rooms.color_token: %v", err)
+	}
+	if exists {
+		return testSpeakerRoomToken
+	}
+	return testSpeakerFallbackToken
 }
 
 // The ?q= name search matches on the decrypted name (name is encrypted at
