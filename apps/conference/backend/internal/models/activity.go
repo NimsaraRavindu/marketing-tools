@@ -69,5 +69,17 @@ type Activity struct {
 	// Description is optional in practice; an activity with nothing to say
 	// beyond its name and time is normal, and is omitted rather than sent
 	// as an empty string.
+	//
+	// Like Session.Title and Session.Description it is sanitized rich-text
+	// HTML rather than plain text, on the same allowlist and for the stated
+	// reason that these amenities were sessions of kind='activity' before
+	// upstream 029 split them out, so their copy carries the same links and
+	// emphasis. Every value is in fact plain text today, because the admin
+	// Activities page 029 shipped edits this in a plain text field rather than
+	// the Quill editor sessions use -- but that is a property of the current
+	// admin UI, not of the column or the write path, both of which accept the
+	// markup. Documented rather than relied on: a reader that assumes plain
+	// text here breaks on the day upstream swaps the control, and nothing in
+	// this repo's tests would catch it.
 	Description string `json:"description,omitempty"`
 }

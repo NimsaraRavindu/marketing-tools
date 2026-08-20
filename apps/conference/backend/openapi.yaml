@@ -9,6 +9,17 @@
 #   - Collections are always arrays (never null); optional scalars are omitted
 #     when empty (never "").
 #   - Timestamps are anchored to the event's `timezone` (also in the payload).
+#   - Three text fields carry sanitized rich-text HTML, not plain text:
+#     Session.title, Session.description and Activity.description. The event
+#     platform runs those through an allowlist on write (`internal/sanitize`.
+#     RichText: p, br, strong, em, u, s, ul, ol, li, blockquote, a[href], and
+#     span carrying a ql-* class or a font-weight style) and strips every other
+#     text field it stores to plain text. This backend passes all of them
+#     through untouched, so a client must render these three as HTML and can
+#     treat the rest as text. The allowlist is the writer's Quill toolbar, so
+#     the markup is bounded, but it is not sanitized again here — a client that
+#     interpolates these into the DOM inherits the writer's allowlist as its
+#     own trust boundary.
 #
 # Scope: the conference-data, attendee-search, connection and recommendation
 # routes the series reshaped. The QR/coin, feedback, profile and AI-assistant
@@ -458,8 +469,8 @@ components:
       properties:
         id: { type: string, format: uuid }
         kind: { type: string, description: "keynote | session | break | activity" }
-        title: { type: string }
-        description: { type: string }
+        title: { type: string, description: "Sanitized rich-text HTML, not plain text -- the content team writes it in a Quill editor and the marketing agenda page renders the markup. See the rich-text convention at the top of this file." }
+        description: { type: string, description: "Sanitized rich-text HTML, same allowlist and same caveat as title. Omitted when empty." }
         category:
           type: string
           description: >
@@ -656,6 +667,15 @@ components:
           description: >
             con_activities.description. Omitted when the activity has nothing to
             say beyond its name and time.
+            Sanitized rich-text HTML on the same allowlist as Session.title (see
+            the convention at the top of this file): upstream sanitizes it as
+            rich text for parity with a session's description, since these
+            amenities were sessions of kind='activity' before migration 029 split
+            them out. In practice every value is plain text today, because the
+            admin Activities page edits it in a plain text field rather than the
+            Quill editor sessions use -- but that is a property of the current
+            admin UI, not of the API, and a client that assumes plain text will
+            break the day upstream swaps the control.
         startTime: { type: string, format: date-time }
         endTime: { type: string, format: date-time }
         location:
