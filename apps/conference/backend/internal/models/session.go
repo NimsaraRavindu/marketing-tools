@@ -30,6 +30,21 @@ type Session struct {
 	// Kind is one of session/keynote/break/activity. 'activity' was added by
 	// upstream migration 021 for the full-width, room-less entries the agenda
 	// already carried as fake breaks (Networking Event, Speaker Reception).
+	// Title and Description are sanitized rich-text HTML, not plain text.
+	// The content team writes both in a Quill editor and the event platform
+	// sanitizes them on write against an allowlist matching that toolbar
+	// (p, br, strong, em, u, s, ul, ol, li, blockquote, a[href], and span
+	// carrying a ql-* class or a font-weight style); the public marketing
+	// agenda renders the markup. Every other text field the writer stores --
+	// a speaker's bio, a footnote, a track-section label -- is stripped to
+	// plain text there, so these two and Activity.Description are the whole
+	// set.
+	//
+	// This backend passes them through untouched rather than stripping or
+	// re-sanitizing: the reader cannot tell markup the content team meant from
+	// markup it did not, and stripping here would silently drop formatting the
+	// marketing page depends on. The consequence is that a client renders these
+	// as HTML and inherits the writer's allowlist as its own trust boundary.
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
 	// Category is the session's topic label -- the chip the agenda renders next
