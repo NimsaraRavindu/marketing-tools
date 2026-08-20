@@ -83,8 +83,37 @@ func TestActivityHandler_List_ReturnsActivities(t *testing.T) {
 	}
 }
 
+// The venue an activity reports is the conference's own
+// (conference_config.venue_name/venue_address), and a venue with a name but no
+// address must drop the address key rather than send "" -- the API-wide
+// convention for optional scalars (openapi.yaml header). floorPlanUrl is never
+// populated at all, since nothing upstream models one.
+func TestActivityHandler_List_OmitsUnsetLocationFields(t *testing.T) {
+	reader := &fakeActivityReader{items: []models.Activity{{
+		ID:       "11111111-1111-1111-1111-111111111111",
+		Name:     "Registration",
+		Location: &models.ActivityLocation{Name: "BMICH"},
+	}}}
+
+	w := doRequest(newActivityTestRouter(NewActivityHandler(reader)), http.MethodGet, "/activities", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "\"name\":\"BMICH\"") {
+		t.Errorf("expected the venue name in the payload, got %s", body)
+	}
+	if strings.Contains(body, "\"address\"") {
+		t.Errorf("expected no address key when the venue has no address, got %s", body)
+	}
+	if strings.Contains(body, "floorPlanUrl") {
+		t.Errorf("expected no floorPlanUrl key -- upstream models no floor plan, got %s", body)
+	}
+}
+
 // The client reads location.name with optional chaining, so an activity with
 // no location must omit the key rather than send an object of empty strings.
+// This is the live shape until the content team fills the venue columns in.
 func TestActivityHandler_List_OmitsAbsentLocation(t *testing.T) {
 	reader := &fakeActivityReader{items: []models.Activity{{
 		ID:   "11111111-1111-1111-1111-111111111111",

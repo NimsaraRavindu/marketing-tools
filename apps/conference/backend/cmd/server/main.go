@@ -96,7 +96,7 @@ func main() {
 	feedbackRepo := repository.NewFeedbackRepo(pool)
 	appConfigRepo := repository.NewAppConfigRepo(pool)
 	favoritesRepo := repository.NewFavoritesRepo(pool)
-	activityRepo := repository.NewActivityRepo(pool, cfg.SessionSlotMinutes, cfg.VenueLocation)
+	activityRepo := repository.NewActivityRepo(pool, cfg.VenueLocation)
 	shopRepo := repository.NewShopRepo(pool)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)

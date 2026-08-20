@@ -281,12 +281,41 @@ paths:
   /activities:
     get:
       tags: [events]
-      summary: Non-session happenings on the General page
+      summary: Venue amenities on the General page
       description: >
-        Sourced from the shared sessions table where kind='activity' (upstream
-        migration 021), scoped to the current conference. Unscheduled activities
-        are excluded, since start/end time is the whole point of the rendering.
-        `location` is always absent: upstream models no per-activity location.
+        Sourced from con_activities joined to con_activity_hours (upstream
+        migration 029), scoped to the current conference. These are the things
+        open at the venue while the agenda runs -- an O2 Bar, an FDE booth, a
+        registration desk. They previously came from the shared sessions table
+        where kind='activity' (upstream migration 021); 029 split that kind,
+        which was carrying both these and the timed full-width bars (Networking
+        Event, Speaker Reception, Conference Party) that belong in the printed
+        agenda export. One kind could not answer "does the export publish this"
+        both ways, so the amenities moved to their own tables and this endpoint
+        followed them -- 'activity' now means only the timed bars, which are
+        served as sessions, not here.
+        One entry per *sitting*: an amenity open on two days is two entries
+        sharing a name, and `id` is the opening-window's id so it stays unique
+        across them. The array is flat and the client groups by name, unchanged
+        from before 029. Ordered by con_activities.position, then name
+        case-insensitively, then day and start of window -- position is the
+        content team's arrangement of the page (upstream 029, edited in the admin
+        Activities page) and defaults to 0, so data entered before that control
+        existed falls through to the name. An activity-level key leads because
+        the client's group-by preserves receive order, which keeps one amenity's
+        sittings contiguous; ties between windows opening at the same minute
+        break on the window id so the order is stable between requests.
+        Times are wall-clock minutes from midnight upstream (the unit
+        conference_days uses, not the session slot grid), anchored in
+        conference_config.timezone.
+        `location` is the conference's own venue (conference_config.venue_name /
+        venue_address, upstream migration 018), so it is the same on every
+        activity -- upstream models no per-activity location. It is omitted
+        entirely while the venue name is unset.
+        Returns an empty array, not an error, against a database below upstream
+        029: migrations are applied by hand across the two repos with no
+        ordering guarantee, so the tables' presence is probed and the read is
+        skipped when they are absent.
         Carries ETag/Cache-Control validators.
       responses:
         "200":
@@ -620,21 +649,29 @@ components:
       type: object
       required: [id, name, startTime, endTime]
       properties:
-        id: { type: string, format: uuid }
-        name: { type: string, description: "The activity's title; the client groups occurrences by it." }
-        description: { type: string, description: "Omitted when the activity has nothing to say beyond its name and time." }
+        id: { type: string, format: uuid, description: "The con_activity_hours row's id, so sittings that share a name stay distinct." }
+        name: { type: string, description: "con_activities.name; the client groups occurrences by it." }
+        description:
+          type: string
+          description: >
+            con_activities.description. Omitted when the activity has nothing to
+            say beyond its name and time.
         startTime: { type: string, format: date-time }
         endTime: { type: string, format: date-time }
         location:
           type: object
           description: >
-            Always omitted. Upstream models no per-activity location, and the
-            room-mapping trigger resolves room to NULL for non-session kinds.
-            Retained because the client optional-chains it.
+            The conference's venue, from conference_config.venue_name /
+            venue_address (upstream migration 018) — the same for every activity,
+            since con_activities models no location of its own: an amenity's
+            place is "at the venue", and the tables record what is open when, not
+            where. Omitted entirely when venue_name is unset (its default),
+            rather than sent as an object with an empty name.
+          required: [name]
           properties:
-            name: { type: string }
-            address: { type: string }
-            floorPlanUrl: { type: string }
+            name: { type: string, description: "From conference_config.venue_name; the location object is absent when this is unset." }
+            address: { type: string, description: "From conference_config.venue_address; omitted when unset." }
+            floorPlanUrl: { type: string, description: "Never sent — nothing upstream models a floor plan. Retained because the client optional-chains it." }
     ShopItem:
       type: object
       required: [id, name, description, price, imageUrl, availableStock, category, visibility]

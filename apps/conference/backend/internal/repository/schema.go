@@ -49,6 +49,25 @@ import (
 // the literal ColorTokenDefault -- the same value the COALESCE would have
 // produced for a row with no token anywhere.
 //
+// The third runs the same way in the other direction, against an *older*
+// migration: upstream 018 added conference_config.venue_name/venue_address, and
+// GET /activities now sources an activity's location from them. 018 predates
+// everything else probed here, so a database carrying it is the ordinary case --
+// but "ordinary" is not "guaranteed" when migrations are applied by hand, and a
+// database below 018 would 500 the whole endpoint rather than lose one nested
+// object. Absent, the columns degrade to NULL, which is the same shape the
+// (nullable, unpopulated by default) columns produce anyway and which
+// ActivityRepo.List already has to render as no location at all.
+//
+// The fourth is the first one about whole *tables* rather than columns: upstream
+// 029 adds con_activities and con_activity_hours, and GET /activities now reads
+// them instead of sessions.kind='activity'. A missing table is the harsher
+// failure of the two -- a query naming it cannot even be planned, so the
+// endpoint 500s outright where a missing column at least fails inside a query
+// that made sense. Absent, the whole read is skipped and the endpoint returns an
+// empty list, which is the same degrade-to-empty the rest of this package does
+// and what lets this ship before the migration is applied by hand.
+//
 // A failed probe degrades *that request only* to the safe form and stays
 // unresolved, so the next request retries. Memoizing a failure would turn a
 // one-off blip into a permanent, silent loss of the field for the lifetime of
@@ -71,6 +90,22 @@ type schemaCaps struct {
 	colorResolved      bool
 	hasRoomColorToken  bool
 	hasTrackColorToken bool
+
+	// Venue capability, resolved independently for the same reason: upstream
+	// 018 is a different migration again, so its columns are a third fact that
+	// can be present while the others are not, and the other way round.
+	venueResolved   bool
+	hasVenueName    bool
+	hasVenueAddress bool
+
+	// Activity-table capability, resolved independently again: upstream 029 is
+	// a fourth migration, and unlike the three above it is about tables rather
+	// than columns. Both tables sit under one flag because 029 creates them in
+	// one transaction and neither is usable without the other -- con_activities
+	// alone has no opening hours to publish, con_activity_hours alone has no
+	// name to publish.
+	activityTablesResolved bool
+	hasActivityTables      bool
 }
 
 // schemaProbeTimeout bounds a single capability probe. It is deliberately short:
@@ -92,6 +127,35 @@ func columnExists(ctx context.Context, pool *pgxpool.Pool, table, column string)
 		     AND column_name = $2
 		 )`,
 		table, column,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// tableExists reports whether a table exists in the connection's current schema
+// (set from DB_SCHEMA via the DSN's search_path). The table-level twin of
+// columnExists, and it answers a different question than "does this column
+// exist": a query naming a missing column and a query naming a missing table
+// both fail, but only the second one is unanswerable even in principle, so a
+// caller cannot substitute an expression for it the way venueSQL substitutes
+// NULL::text -- it has to skip the read entirely.
+//
+// information_schema.tables is filtered to BASE TABLE and VIEW by default for
+// objects the current user can see, which is what we want: a table that exists
+// but is unreadable is, for this purpose, a table that is not there. As with
+// columnExists, a probe that could not be answered is an error distinct from an
+// answered "no", because only the latter is worth caching.
+func tableExists(ctx context.Context, pool *pgxpool.Pool, table string) (bool, error) {
+	var exists bool
+	err := pool.QueryRow(ctx,
+		`SELECT EXISTS (
+		   SELECT 1 FROM information_schema.tables
+		   WHERE table_schema = current_schema()
+		     AND table_name = $1
+		 )`,
+		table,
 	).Scan(&exists)
 	if err != nil {
 		return false, err
@@ -234,4 +298,137 @@ func (c *schemaCaps) colorTokenColumns(ctx context.Context, pool *pgxpool.Pool) 
 	slog.Info("schema capability resolved", "table", "rooms/tracks", "column", "color_token",
 		"rooms", room, "tracks", track)
 	return room, track
+}
+
+// venueSQL returns the SELECT expressions for the conference's venue name and
+// address -- the source of an activity's location.
+//
+// Upstream 018 puts both on conference_config, and the expressions assume the
+// caller's query already aliases that table as cc, which the one venue-reading
+// query does. Each column is folded in only if it is actually there, so a
+// database below 018 -- or one mid-018, if the ALTERs were split -- gets a valid
+// query instead of a 500 on the whole endpoint.
+//
+// The degraded form is NULL::text rather than an empty literal so it scans into
+// the same *string the resolved form does, and so an absent column is
+// indistinguishable downstream from the far more common case of a column that is
+// there and unpopulated: both mean "no location recorded", and both must produce
+// no location object at all rather than one with an empty name.
+func (c *schemaCaps) venueSQL(ctx context.Context, pool *pgxpool.Pool) (nameExpr, addressExpr string) {
+	return venueExprs(c.venueColumns(ctx, pool))
+}
+
+// venueExprs builds the two expressions for a given pair of capabilities. Split
+// out from the probe, like colorTokenExpr, so the degraded shape is testable
+// without a database.
+func venueExprs(name, address bool) (nameExpr, addressExpr string) {
+	nameExpr, addressExpr = "NULL::text", "NULL::text"
+	if name {
+		nameExpr = "cc.venue_name"
+	}
+	if address {
+		addressExpr = "cc.venue_address"
+	}
+	return nameExpr, addressExpr
+}
+
+// venueColumns reports whether conference_config.venue_name and
+// conference_config.venue_address exist, probing at most once successfully and
+// retrying on every request until it gets an answer.
+//
+// Same lifetime rules as hasTopicID and colorTokenColumns, for the same reasons:
+// the probe runs detached from the caller's context so one request cannot decide
+// a process-wide fact by disconnecting mid-probe, the lock is not held across the
+// query, and only an answered probe is cached so a transient failure costs one
+// request's location rather than every request until the process restarts.
+//
+// Both columns sit under one resolved flag because 018 adds them in a single
+// ALTER, the same trade colorTokenColumns makes for 027.
+func (c *schemaCaps) venueColumns(ctx context.Context, pool *pgxpool.Pool) (name, address bool) {
+	c.mu.Lock()
+	if c.venueResolved {
+		defer c.mu.Unlock()
+		return c.hasVenueName, c.hasVenueAddress
+	}
+	c.mu.Unlock()
+
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), schemaProbeTimeout)
+	defer cancel()
+
+	name, err := columnExists(probeCtx, pool, "conference_config", "venue_name")
+	if err == nil {
+		address, err = columnExists(probeCtx, pool, "conference_config", "venue_address")
+	}
+	if err != nil {
+		// Serve this request without a location and leave the capability
+		// unresolved, so the next request re-probes.
+		slog.Warn("schema capability probe failed, serving degraded",
+			"table", "conference_config", "column", "venue_name/venue_address", "error", err)
+		return false, false
+	}
+
+	c.mu.Lock()
+	c.venueResolved, c.hasVenueName, c.hasVenueAddress = true, name, address
+	c.mu.Unlock()
+
+	slog.Info("schema capability resolved", "table", "conference_config",
+		"column", "venue_name/venue_address", "name", name, "address", address)
+	return name, address
+}
+
+// activityTables reports whether upstream 029's con_activities and
+// con_activity_hours are both present, probing at most once successfully and
+// retrying on every request until it gets an answer.
+//
+// Same lifetime rules as hasTopicID, colorTokenColumns and venueColumns, for the
+// same reasons: the probe runs detached from the caller's context so one request
+// cannot decide a process-wide fact by disconnecting mid-probe, the lock is not
+// held across the query, and only an answered probe is cached so a transient
+// failure costs one request's activities rather than every request until the
+// process restarts.
+//
+// The two tables are ANDed rather than reported separately. Unlike the venue
+// columns -- where a half-applied migration still leaves something worth
+// publishing -- half of 029 publishes nothing: without con_activity_hours there
+// are no times, and an activity with no time is exactly the card this endpoint
+// has always refused to render. So the capability is "can this endpoint be
+// served at all", and the second probe is skipped when the first already
+// answered no.
+//
+// Absent, GET /activities returns an empty list rather than an error. That is a
+// real behaviour difference from the column capabilities, which only ever cost a
+// field: here the endpoint is genuinely empty until 029 is applied by hand, and
+// empty is the honest answer -- the venue has no amenities recorded, because
+// there is nowhere yet to record them.
+func (c *schemaCaps) activityTables(ctx context.Context, pool *pgxpool.Pool) bool {
+	c.mu.Lock()
+	if c.activityTablesResolved {
+		defer c.mu.Unlock()
+		return c.hasActivityTables
+	}
+	c.mu.Unlock()
+
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), schemaProbeTimeout)
+	defer cancel()
+
+	exists, err := tableExists(probeCtx, pool, "con_activities")
+	if err == nil && exists {
+		exists, err = tableExists(probeCtx, pool, "con_activity_hours")
+	}
+	if err != nil {
+		// Serve this request with no activities and leave the capability
+		// unresolved, so the next request re-probes rather than inheriting a
+		// blip as a permanently empty endpoint.
+		slog.Warn("schema capability probe failed, serving degraded",
+			"table", "con_activities/con_activity_hours", "error", err)
+		return false
+	}
+
+	c.mu.Lock()
+	c.activityTablesResolved, c.hasActivityTables = true, exists
+	c.mu.Unlock()
+
+	slog.Info("schema capability resolved",
+		"table", "con_activities/con_activity_hours", "present", exists)
+	return exists
 }
