@@ -539,12 +539,26 @@ components:
         isModerator: { type: boolean, description: "From the owned presentation_overlay; replaces the FE moderators.json." }
     Event:
       type: object
-      required: [id, name, isCurrent, timezone]
+      required: [id, name, isCurrent, timezone, startDate, endDate]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         isCurrent: { type: boolean }
         timezone: { type: string, description: "IANA venue timezone (conference_config.timezone) the instants are expressed in." }
+        startDate:
+          type: string
+          format: date
+          description: >-
+            First venue-local day of the conference (conference_config.start_date),
+            the same column the isCurrent rule sorts on.
+        endDate:
+          type: string
+          format: date
+          description: >-
+            Last venue-local day of the conference, inclusive. There is no
+            end_date column upstream, so this is the last conference_days.date,
+            falling back to startDate for a conference whose days are not entered
+            yet. A one-day conference repeats startDate here.
         venueName: { type: string, description: "From conference_config.venue_name; omitted when unset." }
         venueAddress: { type: string, description: "From conference_config.venue_address; omitted when unset." }
     EventAgenda:

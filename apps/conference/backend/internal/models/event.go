@@ -26,11 +26,22 @@ package models
 // expressed in, so the client reads it from the payload instead of hardcoding
 // its own (see .claude/PLAN.md Phase A/G). VenueName/VenueAddress are omitted
 // when unset.
+//
+// StartDate/EndDate bound the conference as YYYY-MM-DD venue-local dates, both
+// inclusive, so a client can label an event ("Sep 1-3, 2026") or tell whether
+// one is over without first fetching its agenda. StartDate is
+// conference_config.start_date -- the same column the IsCurrent rule sorts on,
+// so the two cannot disagree. There is no matching end_date column upstream, so
+// EndDate is derived from the conference's days: the last conference_days.date,
+// or StartDate for a config whose days are not entered yet. Both are always
+// present; a one-day conference reports the same date twice.
 type Event struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	IsCurrent    bool   `json:"isCurrent"`
 	Timezone     string `json:"timezone"`
+	StartDate    string `json:"startDate"`
+	EndDate      string `json:"endDate"`
 	VenueName    string `json:"venueName,omitempty"`
 	VenueAddress string `json:"venueAddress,omitempty"`
 }

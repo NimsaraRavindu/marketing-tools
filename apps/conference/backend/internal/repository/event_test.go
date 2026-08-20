@@ -186,6 +186,105 @@ func TestEventRepo_GetCurrentEvent_AgreesWithGetEventsOnTiedStartDates(t *testin
 	}
 }
 
+// StartDate comes straight from the column; EndDate has no column behind it and
+// is the last conference_days.date, so a conference's span is whatever days the
+// content team actually entered.
+func TestEventRepo_GetEvents_DateBoundsSpanTheEnteredDays(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	f := newEventFixture(t, ctx, "TDD Dated Conference", "2099-04-01")
+	// Inserted out of order on purpose: the end is the greatest date, not the
+	// last row or the highest day_index.
+	f.insertDay(t, ctx, 2, "2099-04-03", "Day 3", 480)
+	f.insertDay(t, ctx, 0, "2099-04-01", "Day 1", 480)
+	f.insertDay(t, ctx, 1, "2099-04-02", "Day 2", 480)
+
+	events, err := repo.GetEvents(ctx)
+	if err != nil {
+		t.Fatalf("GetEvents returned error: %v", err)
+	}
+
+	var got *struct{ start, end string }
+	for _, e := range events {
+		if e.ID == f.configID {
+			got = &struct{ start, end string }{e.StartDate, e.EndDate}
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("config %s missing from GetEvents", f.configID)
+	}
+	if got.start != "2099-04-01" {
+		t.Errorf("startDate = %q, want 2099-04-01", got.start)
+	}
+	if got.end != "2099-04-03" {
+		t.Errorf("endDate = %q, want 2099-04-03 (the last conference_days.date)", got.end)
+	}
+}
+
+// A conference whose days are not entered yet still has to report both bounds --
+// GREATEST skipping the NULL from the day subquery is what makes that hold, and
+// it is the reason the endDate key carries no omitempty.
+func TestEventRepo_GetEvents_EndDateFallsBackToStartDateWithoutDays(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	f := newEventFixture(t, ctx, "TDD Dayless Conference", "2099-05-05")
+
+	events, err := repo.GetEvents(ctx)
+	if err != nil {
+		t.Fatalf("GetEvents returned error: %v", err)
+	}
+	for _, e := range events {
+		if e.ID != f.configID {
+			continue
+		}
+		if e.StartDate != "2099-05-05" || e.EndDate != "2099-05-05" {
+			t.Errorf("bounds = %q / %q, want 2099-05-05 twice for a config with no days", e.StartDate, e.EndDate)
+		}
+		return
+	}
+	t.Fatalf("config %s missing from GetEvents", f.configID)
+}
+
+// GET /events and GET /events/current serve the same struct from two separate
+// statements, so a client reading the bounds off either must see the same two
+// dates. This compares the row GetCurrentEvent actually picked rather than
+// assuming the fixture won -- other rows in this shared dev DB may outrank it.
+func TestEventRepo_GetCurrentEvent_ReportsTheSameDateBoundsAsGetEvents(t *testing.T) {
+	ctx := context.Background()
+	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
+
+	f := newEventFixture(t, ctx, "TDD Current Dated", "2099-06-01")
+	f.insertDay(t, ctx, 0, "2099-06-01", "Day 1", 480)
+	f.insertDay(t, ctx, 1, "2099-06-02", "Day 2", 480)
+
+	current, err := repo.GetCurrentEvent(ctx)
+	if err != nil {
+		t.Fatalf("GetCurrentEvent returned error: %v", err)
+	}
+	if current.StartDate == "" || current.EndDate == "" {
+		t.Errorf("bounds = %q / %q, want both populated", current.StartDate, current.EndDate)
+	}
+
+	events, err := repo.GetEvents(ctx)
+	if err != nil {
+		t.Fatalf("GetEvents returned error: %v", err)
+	}
+	for _, e := range events {
+		if e.ID != current.ID {
+			continue
+		}
+		if e.StartDate != current.StartDate || e.EndDate != current.EndDate {
+			t.Errorf("GetEvents reports %q / %q for %s but GetCurrentEvent reports %q / %q",
+				e.StartDate, e.EndDate, e.ID, current.StartDate, current.EndDate)
+		}
+		return
+	}
+	t.Fatalf("the current config %s is missing from GetEvents", current.ID)
+}
+
 func TestEventRepo_GetEvents_ReadsTimezoneAndVenueColumns(t *testing.T) {
 	ctx := context.Background()
 	repo := NewEventRepo(testDB, 5, time.UTC, "UTC")
