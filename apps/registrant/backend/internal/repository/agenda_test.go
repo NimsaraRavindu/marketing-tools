@@ -52,7 +52,7 @@ func TestGetAgendas(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "title", "date"}).
 		AddRow("session-1", "Day 1", time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)).
 		AddRow("session-2", "Day 2", time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC))
-	mock.ExpectQuery("SELECT s.id, s.title, d.date").WithArgs("event-1").WillReturnRows(rows)
+	mock.ExpectQuery("SELECT id, name, date FROM").WithArgs("event-1").WillReturnRows(rows)
 
 	got, err := repo.GetAgendas(context.Background(), "event-1")
 	if err != nil {
@@ -76,7 +76,7 @@ func TestGetAgendas_Empty(t *testing.T) {
 	repo, mock := newMockRepo(t)
 
 	rows := sqlmock.NewRows([]string{"id", "title", "date"})
-	mock.ExpectQuery("SELECT s.id, s.title, d.date").WithArgs("event-1").WillReturnRows(rows)
+	mock.ExpectQuery("SELECT id, name, date FROM").WithArgs("event-1").WillReturnRows(rows)
 
 	got, err := repo.GetAgendas(context.Background(), "event-1")
 	if err != nil {
