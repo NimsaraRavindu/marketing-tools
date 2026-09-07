@@ -1,0 +1,68 @@
+-- Copyright (c) 2026 WSO2 LLC. (https://www.wso2.com).
+--
+-- WSO2 LLC. licenses this file to you under the Apache License,
+-- Version 2.0 (the "License"); you may not use this file except
+-- in compliance with the License.
+-- You may obtain a copy of the License at
+--
+-- http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing,
+-- software distributed under the License is distributed on an
+-- "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+-- KIND, either express or implied.  See the License for the
+-- specific language governing permissions and limitations
+-- under the License.
+
+-- Seeds `is_shop_hidden`, the switch that takes the Shop tab out of the
+-- attendee microapp's tab bar.
+--
+-- Prerequisite: app_config (migrations/006). No DDL -- this is one row in a
+-- table that already exists, for the same reason 015 gives: reshuffling the
+-- tab bar for the event should be a row edit, not a microapp release.
+--
+--   is_shop_hidden   '1' | '0'   default '0'
+--
+-- '1' means: remove the Shop tab and give its slot to the AI assistant, and
+-- drop the floating assistant button, because the tab now replaces it. '0',
+-- the seeded default, is the layout the app has today -- Shop in the tab bar,
+-- assistant on the floating button.
+--
+-- Why this is *not* an `is_<feature>_enabled` row
+-- ----------------------------------------------
+-- `is_shop_enabled` already exists (015) and does the gating: off, the shop's
+-- four routes answer 503 and the microapp shows the coming-soon placeholder.
+-- This row is orthogonal to it and deliberately spelled without the
+-- `_enabled` suffix, on two counts:
+--
+--  1. Mechanically. internal/features/resolver.go discovers features from the
+--     row set itself -- any `is_<x>_enabled` key it does not recognise becomes
+--     a Feature with generic copy (that is what lets an operator add a feature
+--     without a redeploy). Spelling this key `is_shop_hidden_enabled` would
+--     therefore conjure a phantom `shop_hidden` feature into every
+--     /app-configs response and every gate lookup, with no registry entry, no
+--     routes and placeholder copy nobody wrote.
+--  2. Semantically. A feature flag answers "does this part of the app work";
+--     this row answers "where does the reader reach it from". Nothing on the
+--     backend reads it and no route is gated by it -- it is presentational
+--     only, and the two states are independent: the shop can be enabled and
+--     hidden at the same time, which is exactly the case this exists for
+--     (assistant promoted to the tab bar while the shop stays reachable from
+--     elsewhere and its routes keep answering).
+--
+-- ON CONFLICT DO NOTHING, like every seed in 015: re-running this file never
+-- resets a value an operator has set, it only fills the gap.
+--
+-- The same '0' default is compiled into internal/handlers/app_config.go as
+-- shopHiddenDefault, which emits the row unconditionally when the table does
+-- not hold it -- so an environment where this file has not run still answers
+-- identically. Changing one means changing the other (and the microapp's
+-- src/services/types/config.ts) in the same change; nothing enforces it.
+INSERT INTO app_config (config_key, value, created_by, updated_by)
+VALUES ('is_shop_hidden', '0', 'SYSTEM', 'SYSTEM')
+ON CONFLICT (config_key) DO NOTHING;
+
+-- No GRANT block here on purpose. 015's grant is `GRANT SELECT ON app_config`
+-- -- table-wide, not per row -- so the app role can already read whatever
+-- rows this file adds. Repeating it would only re-run the same statement, and
+-- the role list it is guarded on lives in one place for a reason.

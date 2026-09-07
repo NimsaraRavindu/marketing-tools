@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -43,6 +44,21 @@ func newAppConfigTestRouter(h *AppConfigHandler) *gin.Engine {
 	return r
 }
 
+// decodeAppConfigs flattens the response into key -> value, which is how the
+// microapp reads it and how most of these assertions are phrased.
+func decodeAppConfigs(t *testing.T, body []byte) map[string]string {
+	t.Helper()
+	var items []models.AppConfig
+	if err := json.Unmarshal(body, &items); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	out := make(map[string]string, len(items))
+	for _, item := range items {
+		out[item.Key] = item.Value
+	}
+	return out
+}
+
 func TestAppConfigHandler_List_Success(t *testing.T) {
 	reader := &fakeAppConfigReader{configs: []models.AppConfig{
 		{Key: "ATTENDEES_SYNC", Value: "COMPLETED", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
@@ -55,16 +71,16 @@ func TestAppConfigHandler_List_Success(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
-	var got []models.AppConfig
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(got) != 1 || got[0].Key != "ATTENDEES_SYNC" {
+	got := decodeAppConfigs(t, w.Body.Bytes())
+	if got["ATTENDEES_SYNC"] != "COMPLETED" {
 		t.Errorf("unexpected response: %+v", got)
 	}
 }
 
-func TestAppConfigHandler_List_EmptyReturnsEmptyArrayNotNull(t *testing.T) {
+// An empty table must still serialise as a JSON array. It is no longer the
+// *empty* array -- the presentational defaults are always emitted -- but a
+// `null` body is what the microapp cannot survive, so that is what this pins.
+func TestAppConfigHandler_List_EmptyReturnsArrayNotNull(t *testing.T) {
 	h := NewAppConfigHandler(&fakeAppConfigReader{configs: nil}, nil, "")
 	r := newAppConfigTestRouter(h)
 
@@ -73,8 +89,12 @@ func TestAppConfigHandler_List_EmptyReturnsEmptyArrayNotNull(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
-	if w.Body.String() != "[]" {
-		t.Errorf("body = %q, want empty JSON array", w.Body.String())
+	if body := w.Body.String(); body == "null" || body[0] != '[' {
+		t.Errorf("body = %q, want a JSON array", body)
+	}
+	got := decodeAppConfigs(t, w.Body.Bytes())
+	if len(got) != 1 {
+		t.Errorf("response = %+v, want only the presentational defaults", got)
 	}
 }
 
@@ -115,14 +135,7 @@ func TestAppConfigHandler_List_SynthesisesMissingFeatureRows(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
 	}
-	got := map[string]string{}
-	var items []models.AppConfig
-	if err := json.Unmarshal(w.Body.Bytes(), &items); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	for _, item := range items {
-		got[item.Key] = item.Value
-	}
+	got := decodeAppConfigs(t, w.Body.Bytes())
 
 	if got["is_ai_chat_enabled"] != "0" {
 		t.Errorf("is_ai_chat_enabled = %q, want %q", got["is_ai_chat_enabled"], "0")
@@ -195,5 +208,90 @@ func TestAppConfigHandler_List_IsSortedByKey(t *testing.T) {
 		if items[i-1].Key > items[i].Key {
 			t.Fatalf("out of order at %d: %q then %q", i, items[i-1].Key, items[i].Key)
 		}
+	}
+}
+
+// is_shop_hidden is presentational, not a feature flag, so it is emitted
+// unconditionally -- against an unseeded database and, unlike the feature
+// rows, even when this handler was built without a resolver.
+func TestAppConfigHandler_List_ShopHiddenDefaultsToVisible(t *testing.T) {
+	feats := &fakeFeatureSnapshotter{states: map[features.Feature]features.State{
+		features.Shop: {Feature: features.Shop, Enabled: true, Title: "a", Message: "b"},
+	}}
+
+	tests := []struct {
+		name  string
+		rows  []models.AppConfig
+		feats FeatureSnapshotter
+		want  string
+	}{
+		{
+			name: "no row seeded",
+			rows: nil,
+			// The whole point: 016 has not run, the microapp
+			// still learns the tab bar layout from the server.
+			feats: feats,
+			want:  "0",
+		},
+		{
+			name:  "stored row wins",
+			rows:  []models.AppConfig{{Key: ShopHiddenKey, Value: "1", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"}},
+			feats: feats,
+			want:  "1",
+		},
+		{
+			name: "nil snapshotter still emits it",
+			rows: nil,
+			// withDefaults skips the feature rows when features
+			// is nil; this key must not go with them.
+			feats: nil,
+			want:  "0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewAppConfigHandler(&fakeAppConfigReader{configs: tt.rows}, tt.feats, "")
+			r := newAppConfigTestRouter(h)
+
+			w := doRequest(r, http.MethodGet, "/app-configs", nil)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+			}
+			var items []models.AppConfig
+			if err := json.Unmarshal(w.Body.Bytes(), &items); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			seen := 0
+			for _, item := range items {
+				if item.Key != ShopHiddenKey {
+					continue
+				}
+				seen++
+				if item.Value != tt.want {
+					t.Errorf("%s = %q, want %q", ShopHiddenKey, item.Value, tt.want)
+				}
+			}
+			if seen != 1 {
+				t.Errorf("%s appeared %d times, want exactly one row", ShopHiddenKey, seen)
+			}
+		})
+	}
+}
+
+// The key must not be mistaken for a feature flag by the resolver's
+// is_<x>_enabled discovery: a phantom `shop_hidden` feature would show up in
+// every snapshot with copy nobody wrote. features_test.go asserts the same
+// thing from the resolver's side; this pins the spelling the handler emits.
+func TestShopHiddenKeyIsNotAFeatureFlagSpelling(t *testing.T) {
+	if ShopHiddenKey != "is_shop_hidden" {
+		t.Errorf("ShopHiddenKey = %q, want the spelling the microapp and migration 016 use", ShopHiddenKey)
+	}
+	if strings.HasSuffix(ShopHiddenKey, "_enabled") {
+		t.Errorf("%q ends in _enabled, so features.apply would read it as a feature", ShopHiddenKey)
+	}
+	if ShopHiddenKey == features.Shop.EnabledKey() {
+		t.Errorf("%q collides with the shop's gating flag", ShopHiddenKey)
 	}
 }

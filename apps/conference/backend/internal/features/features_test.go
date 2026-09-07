@@ -19,6 +19,7 @@ package features
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -187,6 +188,42 @@ func TestFeatureAddedOnlyInTheDatabaseIsHonoured(t *testing.T) {
 	state, gated := res.Gate(ctx, "GET", "/activities")
 	if !gated || state.Feature != "scavenger_hunt" || state.Enabled {
 		t.Errorf("Gate() = %+v, %v; want the database-only feature to govern the route", state, gated)
+	}
+}
+
+// is_shop_hidden is a presentational app_config row (migrations/016), not a
+// feature flag: it hides the microapp's Shop tab, and is_shop_enabled remains
+// the switch that closes the shop's routes. The discovery in apply() turns any
+// unrecognised is_<x>_enabled row into a Feature, so the whole reason that key
+// avoids the _enabled suffix is to stay out of the snapshot -- a phantom
+// feature there would carry generic copy nobody wrote and gate nothing.
+func TestShopHiddenIsNotDiscoveredAsAFeature(t *testing.T) {
+	res, _ := newTestResolver(&fakeReader{rows: rows(
+		"is_shop_hidden", "1",
+		"is_shop_enabled", "1",
+	)})
+	ctx := context.Background()
+
+	snap := res.Snapshot(ctx)
+	for f := range snap {
+		if strings.Contains(string(f), "hidden") {
+			t.Errorf("is_shop_hidden produced a feature %q; presentational rows must not become features", f)
+		}
+	}
+	if _, ok := snap[Feature("shop_hidden")]; ok {
+		t.Error("shop_hidden must not appear in a snapshot")
+	}
+	if len(snap) != len(All()) {
+		t.Errorf("snapshot has %d features, want the %d in the registry", len(snap), len(All()))
+	}
+
+	// And the row it sits beside still works: hiding the tab is orthogonal
+	// to gating the shop.
+	if !res.Enabled(ctx, Shop) {
+		t.Error("is_shop_enabled=1 should keep the shop's routes answering")
+	}
+	if _, ok := featureFromEnabledKey("is_shop_hidden"); ok {
+		t.Error("featureFromEnabledKey must not match is_shop_hidden")
 	}
 }
 
