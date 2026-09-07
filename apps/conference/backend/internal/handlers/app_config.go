@@ -28,6 +28,39 @@ import (
 	"wso2-coin-backend/internal/models"
 )
 
+// Keys this handler answers for itself rather than reading them out of the
+// app_config table.
+const (
+	// MerchantWalletAddressKey carries SHOP_MASTER_WALLET_ADDRESS to the
+	// microapp, which needs the destination wallet to render a checkout.
+	// It is camelCase where every stored key is snake_case because it has
+	// never been a row -- openapi.yaml documents it as synthetic.
+	MerchantWalletAddressKey = "merchantWalletAddress"
+
+	// ShopHiddenKey hides the Shop tab in the microapp's tab bar. When it
+	// reads "1" the tab is removed and its slot goes to the AI assistant,
+	// which also drops the floating assistant button because the tab
+	// replaces it.
+	//
+	// Deliberately *not* spelled is_shop_<something>_enabled. That suffix
+	// is the feature-flag convention, and features.apply discovers a
+	// feature from any is_<x>_enabled row it finds, so an "_enabled"
+	// spelling here would invent a phantom feature -- one with no entry in
+	// the registry, no routes in the gate map and no placeholder copy.
+	// This key gates no route and changes no response: it is
+	// presentational only.
+	//
+	// is_shop_enabled remains the gate (503 plus coming-soon copy), and
+	// the two are orthogonal: a shop can be enabled and still hidden,
+	// which is how the tab bar is reshuffled without closing the shop.
+	ShopHiddenKey = "is_shop_hidden"
+)
+
+// shopHiddenDefault keeps the Shop tab visible. It matches the '0' seeded by
+// migrations/016_shop_hidden.sql, so an unseeded database and a seeded one
+// answer identically.
+const shopHiddenDefault = "0"
+
 // AppConfigReader is satisfied by *repository.AppConfigRepo.
 type AppConfigReader interface {
 	List(ctx context.Context) ([]models.AppConfig, error)
@@ -48,8 +81,8 @@ type AppConfigHandler struct {
 }
 
 // NewAppConfigHandler constructs an AppConfigHandler. features may be nil, in
-// which case no feature-flag rows are synthesised and the response is exactly
-// what the table holds.
+// which case no feature-flag rows are synthesised and the response is the
+// table's rows plus the presentational defaults withDefaults always emits.
 func NewAppConfigHandler(configs AppConfigReader, feats FeatureSnapshotter, merchantWalletAddress string) *AppConfigHandler {
 	return &AppConfigHandler{configs: configs, features: feats, merchantWalletAddress: merchantWalletAddress}
 }
@@ -67,11 +100,11 @@ func (h *AppConfigHandler) List(c *gin.Context) {
 		configs = []models.AppConfig{}
 	}
 
-	configs = h.withFeatureDefaults(c.Request.Context(), configs)
+	configs = h.withDefaults(c.Request.Context(), configs)
 
 	if h.merchantWalletAddress != "" {
 		configs = append(configs, models.AppConfig{
-			Key:   "merchantWalletAddress",
+			Key:   MerchantWalletAddressKey,
 			Value: h.merchantWalletAddress,
 		})
 	}
@@ -79,9 +112,10 @@ func (h *AppConfigHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, configs)
 }
 
-// withFeatureDefaults appends a row for every feature-flag key the table does
-// not hold, so the microapp receives a complete set of flags even against a
-// database that has not been seeded (or that is behind on migrations).
+// withDefaults appends a row for every key the microapp expects to always be
+// there but which the table does not hold, so it receives a complete set
+// against a database that has not been seeded (or that is behind on
+// migrations).
 //
 // Rows that do exist win untouched -- this only fills gaps, so it can never
 // contradict what an operator set. Synthetic rows carry Go zero values in the
@@ -90,13 +124,18 @@ func (h *AppConfigHandler) List(c *gin.Context) {
 //
 // Without this, a missing row means "the client falls back to whatever its
 // build compiled in", and the compiled-in default of an old build is exactly
-// what a flag is supposed to override. Answering from the server keeps one
-// source of truth for what a feature does when nobody has configured it.
-func (h *AppConfigHandler) withFeatureDefaults(ctx context.Context, configs []models.AppConfig) []models.AppConfig {
-	if h.features == nil {
-		return configs
-	}
-
+// what a config row is supposed to override. Answering from the server keeps
+// one source of truth for what the app does when nobody has configured it.
+//
+// Two kinds of default are filled, and the split matters:
+//
+//   - Presentational keys, currently just ShopHiddenKey, are unconditional.
+//     They are not features, so nothing about them depends on the resolver
+//     and they must be emitted even when this handler was built without one.
+//   - Feature-flag keys come from the resolver snapshot and are therefore
+//     skipped when features is nil, in which case the response is exactly
+//     what the table holds plus the presentational defaults.
+func (h *AppConfigHandler) withDefaults(ctx context.Context, configs []models.AppConfig) []models.AppConfig {
 	present := make(map[string]struct{}, len(configs))
 	for _, cfg := range configs {
 		present[cfg.Key] = struct{}{}
@@ -106,17 +145,22 @@ func (h *AppConfigHandler) withFeatureDefaults(ctx context.Context, configs []mo
 		if _, ok := present[key]; ok {
 			return
 		}
+		present[key] = struct{}{}
 		configs = append(configs, models.AppConfig{Key: key, Value: value})
 	}
 
-	for f, state := range h.features.Snapshot(ctx) {
-		enabled := "0"
-		if state.Enabled {
-			enabled = "1"
+	appendIfMissing(ShopHiddenKey, shopHiddenDefault)
+
+	if h.features != nil {
+		for f, state := range h.features.Snapshot(ctx) {
+			enabled := "0"
+			if state.Enabled {
+				enabled = "1"
+			}
+			appendIfMissing(f.EnabledKey(), enabled)
+			appendIfMissing(f.TitleKey(), state.Title)
+			appendIfMissing(f.MessageKey(), state.Message)
 		}
-		appendIfMissing(f.EnabledKey(), enabled)
-		appendIfMissing(f.TitleKey(), state.Title)
-		appendIfMissing(f.MessageKey(), state.Message)
 	}
 
 	// Snapshot is a map, so the synthesised rows arrive in a random order.

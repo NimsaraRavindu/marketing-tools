@@ -942,6 +942,17 @@ paths:
         zero values of the audit columns -- `createdBy`/`updatedBy` as "" and
         `createdOn`/`updatedOn` as "0001-01-01T00:00:00Z" -- because the model
         omits none of them. Read the audit columns as absent on that entry.
+        `is_shop_hidden` (`"1"` | `"0"`, default `"0"`) is always present, row
+        or no row: it is seeded by migrations/016 and, when the table does not
+        hold it, synthesised as `"0"` with the same zero-valued audit columns.
+        `"1"` means the microapp removes the Shop tab from the tab bar, gives
+        its slot to the AI assistant, and drops the floating assistant button
+        because the tab replaces it. It is presentational only -- it gates no
+        route and changes no other response -- and is orthogonal to
+        `is_shop_enabled`, which is the flag that closes the shop routes (503
+        plus coming-soon copy); a shop can be enabled and still hidden. It is
+        deliberately not spelled `is_shop_<x>_enabled`, so that it is not
+        picked up as a feature flag.
       responses:
         "200":
           description: "OK"
