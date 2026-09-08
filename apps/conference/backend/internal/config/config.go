@@ -125,6 +125,8 @@ type MoesifConfig struct {
 }
 
 type Config struct {
+	RegistrantServiceURL string
+
 	DBHost     string
 	DBPort     string
 	DBUser     string
@@ -301,6 +303,7 @@ func Load() Config {
 	}
 
 	return Config{
+		RegistrantServiceURL: strings.TrimSpace(os.Getenv("REGISTRANT_SERVICE_URL")),
 		DBHost:     os.Getenv("DB_HOST"),
 		DBPort:     dbPort,
 		DBUser:     os.Getenv("DB_USER"),
@@ -462,6 +465,10 @@ func (c Config) DSN() string {
 }
 
 func (c Config) Validate() error {
+	if c.RegistrantServiceURL == "" {
+		return errors.New("REGISTRANT_SERVICE_URL is required")
+	}
+
 	if c.DBHost == "" {
 		return errors.New("DB_HOST is required")
 	}

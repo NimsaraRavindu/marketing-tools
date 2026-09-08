@@ -1506,6 +1506,70 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+
+  /registrant/events/current/agendas:
+    get:
+      tags:
+        - Registrant
+      summary: List current agendas for registration
+      description: Proxied to the internal Registrant backend. Returns agendas/days for the current event.
+      responses:
+        '200':
+          description: OK
+
+  /registrant/agendas/{agendaId}/attendees:
+    post:
+      tags:
+        - Registrant
+      summary: Register an attendee for an agenda
+      description: Proxied to the internal Registrant backend. Registers an attendee for a specific agenda/day.
+      parameters:
+        - name: agendaId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                attendeeId:
+                  type: string
+              required:
+                - attendeeId
+      responses:
+        '201':
+          description: Created
+
+  /registrant/agendas/{agendaId}/attendees/count:
+    get:
+      tags:
+        - Registrant
+      summary: Get attendee count for an agenda
+      description: Proxied to the internal Registrant backend. Returns internal and external check-in counts.
+      parameters:
+        - name: agendaId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /registrant/attendees/sync:
+    post:
+      tags:
+        - Registrant
+      summary: Sync attendees to Google Sheets
+      description: Proxied to the internal Registrant backend. Triggers the Google Sheets export.
+      responses:
+        '200':
+          description: OK
+
 components:
   securitySchemes:
     jwtAssertion:

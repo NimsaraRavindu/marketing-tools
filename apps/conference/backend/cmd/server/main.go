@@ -272,6 +272,9 @@ func main() {
 	// cannot probe which features exist.
 	api.Use(middleware.FeatureGate(featureResolver))
 	{
+		// Reverse proxy for Registrant backend
+		api.Any("/registrant/*path", handlers.RegistrantProxyHandler(cfg.RegistrantServiceURL))
+
 		// Conference data is read-only and changes rarely, so these GETs carry
 		// ETag + Cache-Control validators.
 		cacheable := middleware.ETag("private, max-age=60, must-revalidate")
