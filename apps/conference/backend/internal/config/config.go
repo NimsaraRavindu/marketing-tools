@@ -125,7 +125,7 @@ type MoesifConfig struct {
 }
 
 type Config struct {
-	RegistrantServiceURL string
+	RegistrantService ExternalServiceConfig
 
 	DBHost     string
 	DBPort     string
@@ -303,7 +303,14 @@ func Load() Config {
 	}
 
 	return Config{
-		RegistrantServiceURL: strings.TrimSpace(os.Getenv("REGISTRANT_SERVICE_URL")),
+		RegistrantService: ExternalServiceConfig{
+			Endpoint: strings.TrimSpace(os.Getenv("REGISTRANT_SERVICE_URL")),
+			OAuth: OAuthClientConfig{
+				TokenURL:     os.Getenv("REGISTRANT_TOKEN_URL"),
+				ClientID:     os.Getenv("REGISTRANT_CLIENT_ID"),
+				ClientSecret: os.Getenv("REGISTRANT_CLIENT_SECRET"),
+			},
+		},
 		DBHost:     os.Getenv("DB_HOST"),
 		DBPort:     dbPort,
 		DBUser:     os.Getenv("DB_USER"),
@@ -465,9 +472,12 @@ func (c Config) DSN() string {
 }
 
 func (c Config) Validate() error {
-	if c.RegistrantServiceURL == "" {
+	if c.RegistrantService.Endpoint == "" {
 		return errors.New("REGISTRANT_SERVICE_URL is required")
 	}
+	// Note: We skip checking REGISTRANT_CLIENT_ID etc here because for local dev 
+	// they can be entirely blank. The proxy handler will simply skip fetching a token 
+	// if they are missing, allowing local localhost testing to proceed smoothly.
 
 	if c.DBHost == "" {
 		return errors.New("DB_HOST is required")

@@ -273,7 +273,7 @@ func main() {
 	api.Use(middleware.FeatureGate(featureResolver))
 	{
 		// Reverse proxy for Registrant backend
-		api.Any("/registrant/*path", handlers.RegistrantProxyHandler(cfg.RegistrantServiceURL))
+		api.Any("/registrant/*path", handlers.RegistrantProxyHandler(cfg.RegistrantService))
 
 		// Conference data is read-only and changes rarely, so these GETs carry
 		// ETag + Cache-Control validators.
