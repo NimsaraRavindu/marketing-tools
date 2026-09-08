@@ -355,6 +355,105 @@ func TestValidate_TokenValidatorRequiresJWKSAndIssuer(t *testing.T) {
 	}
 }
 
+// JWT_AUDIENCE is a comma-separated list because more than one Asgardeo
+// application calls this backend -- the attendee microapp plus the service
+// application the AI service uses for its own reads -- and each mints tokens
+// carrying its own client id as the audience. Parsing has to survive however a
+// deployer actually types that into the Choreo console: spaces around the
+// separators, and a trailing comma left behind after removing an entry. A
+// blank entry that survived would be an audience no token can ever match, and
+// would sit in the accepted set looking like configuration that works.
+func TestLoad_JWTAudience_ParsesCommaSeparatedList(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want []string
+	}{
+		{"single value is unchanged", "client-a", []string{"client-a"}},
+		{"spaces around separators are trimmed", "a, b ,c", []string{"a", "b", "c"}},
+		{"trailing comma yields no empty entry", "a,b,", []string{"a", "b"}},
+		{"leading comma yields no empty entry", ",a,b", []string{"a", "b"}},
+		{"separators and spaces only yield nothing", " , ", nil},
+		{"unset yields nothing", "", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("DB_HOST", "localhost")
+			t.Setenv("DB_USER", "administrator")
+			t.Setenv("DB_NAME", "agenda_organizer")
+			t.Setenv("DB_SCHEMA", "marketingops")
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("JWT_AUDIENCE", tt.env)
+
+			got := Load().Audiences
+			if len(got) != len(tt.want) {
+				t.Fatalf("JWT_AUDIENCE=%q -> Audiences = %#v, want %#v", tt.env, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("JWT_AUDIENCE=%q -> Audiences = %#v, want %#v", tt.env, got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+// A JWT_AUDIENCE of nothing but separators parses to an empty list, which must
+// be rejected exactly like an unset one: booting with an accepted-audience set
+// that no token can match would 401 every request while looking configured.
+func TestValidate_TokenValidatorRejectsBlankAudienceList(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DB_HOST", "localhost")
+	t.Setenv("DB_USER", "administrator")
+	t.Setenv("DB_NAME", "agenda_organizer")
+	t.Setenv("DB_SCHEMA", "marketingops")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("TOKEN_VALIDATOR_ENABLED", "true")
+	t.Setenv("JWKS_ENDPOINT", "https://idp.example/oauth2/jwks")
+	t.Setenv("JWT_ISSUER", "https://idp.example/oauth2/token")
+	t.Setenv("JWT_AUDIENCE", " , ")
+	t.Setenv("PII_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	// Unrelated to audiences, but Validate() refuses without it, and a test that
+	// wants to see the JWT_AUDIENCE error must not trip over a different one first.
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
+
+	err := Load().Validate()
+	if err == nil {
+		t.Fatal("expected an error for a JWT_AUDIENCE that parses to no audiences")
+	}
+	if !strings.Contains(err.Error(), "JWT_AUDIENCE") {
+		t.Errorf("error = %q, want it to name JWT_AUDIENCE", err.Error())
+	}
+}
+
+// A multi-value JWT_AUDIENCE satisfies the validator requirement the same way a
+// single value always did.
+func TestValidate_TokenValidatorAcceptsMultipleAudiences(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DB_HOST", "localhost")
+	t.Setenv("DB_USER", "administrator")
+	t.Setenv("DB_NAME", "agenda_organizer")
+	t.Setenv("DB_SCHEMA", "marketingops")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("TOKEN_VALIDATOR_ENABLED", "true")
+	t.Setenv("JWKS_ENDPOINT", "https://idp.example/oauth2/jwks")
+	t.Setenv("JWT_ISSUER", "https://idp.example/oauth2/token")
+	t.Setenv("JWT_AUDIENCE", "microapp-client-id, ai-service-client-id")
+	t.Setenv("PII_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	// Required by Validate() and nothing to do with audiences; without it this
+	// test would pass or fail on an unrelated field.
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
+
+	cfg := Load()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected a two-audience config to validate, got %v", err)
+	}
+	if len(cfg.Audiences) != 2 {
+		t.Fatalf("Audiences = %#v, want two entries", cfg.Audiences)
+	}
+}
+
 func TestDSN_WithAndWithoutPassword(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("DB_HOST", "localhost")

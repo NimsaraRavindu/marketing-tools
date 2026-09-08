@@ -261,7 +261,7 @@ func main() {
 	api.Use(middleware.Auth(middleware.AuthConfig{
 		JWKSEndpoint:          cfg.JWKSEndpoint,
 		Issuer:                cfg.Issuer,
-		Audience:              cfg.Audience,
+		Audiences:             cfg.Audiences,
 		ClockSkew:             5 * time.Minute,
 		TokenValidatorEnabled: cfg.TokenValidatorEnabled,
 	}))
