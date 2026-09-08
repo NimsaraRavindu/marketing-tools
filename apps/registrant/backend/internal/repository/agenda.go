@@ -17,6 +17,7 @@
 package repository
 
 import (
+	"database/sql"
 	"context"
 	"strings"
 	"time"
@@ -24,16 +25,24 @@ import (
 	"attendee-registration/internal/crypto"
 )
 
-// GetAgendas returns every session scheduled for the given event (a
-// conference_config id). Registrant no longer owns an agenda table -- this
-// reads the shared sessions/conference_days tables, the same way
-// apps/conference/backend's own repos do.
+// GetAgendas returns the conference days and scan-enabled activities for the
+// given event (a conference_config id). These are returned as a unified list
+// of text labels (e.g. "Day 1", "O2 Bar") that act as primary keys for attendance.
 func (r *Repository) GetAgendas(ctx context.Context, eventID string) ([]Agenda, error) {
 	const q = `
-		SELECT s.id, s.title, d.date
-		FROM sessions s
-		JOIN conference_days d ON s.day_id = d.id
-		WHERE s.config_id = $1`
+		SELECT id, name, date FROM (
+			SELECT label AS id, label AS name, date, 1 AS sort_order
+			FROM conference_days
+			WHERE config_id = $1
+			
+			UNION ALL
+			
+			SELECT a.name AS id, a.name AS name, c.start_date AS date, 2 AS sort_order
+			FROM con_activities a
+			JOIN conference_config c ON a.config_id = c.id
+			WHERE a.config_id = $1 AND a.scan_enabled = true
+		) combined
+		ORDER BY sort_order ASC, date ASC, name ASC`
 
 	rows, err := r.db.QueryContext(ctx, q, eventID)
 	if err != nil {
@@ -45,8 +54,15 @@ func (r *Repository) GetAgendas(ctx context.Context, eventID string) ([]Agenda, 
 	for rows.Next() {
 		var a Agenda
 		var date time.Time
-		if err := rows.Scan(&a.ID, &a.Name, &date); err != nil {
+		var nullID, nullName sql.NullString
+		if err := rows.Scan(&nullID, &nullName, &date); err != nil {
 			return nil, err
+		}
+		a.ID = nullID.String
+		a.Name = nullName.String
+		if a.ID == "" {
+			a.ID = "Unknown"
+			a.Name = "Unknown"
 		}
 		a.Date = date.Format("2006-01-02")
 		agendas = append(agendas, a)
@@ -57,8 +73,8 @@ func (r *Repository) GetAgendas(ctx context.Context, eventID string) ([]Agenda, 
 	return agendas, nil
 }
 
-// InsertAgendaAttendee registers an attendee for an agenda (a session, per
-// the shared schema). The attendee's email is encrypted at rest; lookups
+// InsertAgendaAttendee registers an attendee for a specific agenda label 
+// (e.g. "Day 1", "O2 Bar"). The attendee's email is encrypted at rest; lookups
 // against it can't use a SQL WHERE (see GetAgendaAttendee) since encryption
 // is non-deterministic.
 func (r *Repository) InsertAgendaAttendee(ctx context.Context, attendeeID, agendaID, userEmail string) error {
@@ -68,7 +84,7 @@ func (r *Repository) InsertAgendaAttendee(ctx context.Context, attendeeID, agend
 	}
 
 	const q = `
-		INSERT INTO attendee_registration (attendee_id, session_id, updated_by)
+		INSERT INTO attendee_registration (attendee_id, day_label, updated_by)
 		VALUES ($1, $2, $3)`
 
 	_, err = r.db.ExecContext(ctx, q, encrypted, agendaID, userEmail)
@@ -81,7 +97,7 @@ func (r *Repository) InsertAgendaAttendee(ctx context.Context, attendeeID, agend
 // SQL -- it fetches every registration for the agenda and decrypts each to
 // compare.
 func (r *Repository) GetAgendaAttendee(ctx context.Context, attendeeID, agendaID string) (*AgendaAttendee, error) {
-	const q = `SELECT attendee_id FROM attendee_registration WHERE session_id = $1`
+	const q = `SELECT attendee_id FROM attendee_registration WHERE day_label = $1`
 
 	rows, err := r.db.QueryContext(ctx, q, agendaID)
 	if err != nil {
@@ -112,7 +128,7 @@ func (r *Repository) GetAgendaAttendee(ctx context.Context, attendeeID, agendaID
 // for an agenda. attendee_id is encrypted at rest, so classification
 // happens after decrypting each row rather than via a SQL LIKE.
 func (r *Repository) GetAgendaAttendeeCount(ctx context.Context, agendaID string) (AgendaAttendeeCount, error) {
-	const q = `SELECT attendee_id FROM attendee_registration WHERE session_id = $1`
+	const q = `SELECT attendee_id FROM attendee_registration WHERE day_label = $1`
 
 	rows, err := r.db.QueryContext(ctx, q, agendaID)
 	if err != nil {

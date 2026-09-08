@@ -25,23 +25,25 @@ import (
 )
 
 // GetAttendeeSummary returns one row per agenda (session) registration for
-// the current event, joined back to its session title. attendee_id is
-// encrypted at rest, so this decrypts each row here to produce Username and
-// to classify UserType, since neither can be done in SQL against
+// the current event, grouped by its conference day or activity label. 
+// attendee_id is encrypted at rest, so this decrypts each row here to produce 
+// Username and to classify UserType, since neither can be done in SQL against
 // ciphertext.
 func (r *Repository) GetAttendeeSummary(ctx context.Context) ([]AttendeeSummary, error) {
 	const q = `
 		SELECT
-			s.title AS agenda,
+			ar.day_label AS agenda,
 			ar.attendee_id AS username,
 			ar.updated_by AS scannedBy
 		FROM
 			attendee_registration ar
-			JOIN sessions s ON ar.session_id = s.id
+			LEFT JOIN conference_days d ON ar.day_label = d.label
+			LEFT JOIN con_activities a ON ar.day_label = a.name
 		WHERE
-			s.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
+			d.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
+			OR a.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
 		ORDER BY
-			s.title`
+			ar.day_label ASC`
 
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
