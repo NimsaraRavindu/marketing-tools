@@ -139,9 +139,26 @@ type Config struct {
 	AppEnv     string
 
 	// JWT / auth
-	JWKSEndpoint          string
-	Issuer                string
-	Audience              string
+	JWKSEndpoint string
+	Issuer       string
+	// Audiences is the set of `aud` values the token validator accepts, read
+	// from JWT_AUDIENCE as a comma-separated list. A token is accepted when its
+	// aud claim names AT LEAST ONE of these (see middleware.AuthConfig), not
+	// all of them.
+	//
+	// It is a list rather than a single value because more than one Asgardeo
+	// application now calls this backend, and each mints tokens carrying its
+	// own client id as the audience: the attendee-facing microapp, plus the
+	// service/automation application the AI service uses to read session
+	// details, event agendas, speakers and activities back out of here. With a
+	// single accepted audience the AI service's own reads 401 with nothing in
+	// the logs pointing at the audience -- the token is perfectly valid, signed
+	// by the same IdP, and simply names a different application -- so the fault
+	// gets chased as an expiry, a JWKS, or a gateway problem instead.
+	//
+	// A single value keeps working exactly as before: parseList of one entry is
+	// a one-element list, and one-of-one is the old equality check.
+	Audiences             []string
 	TokenValidatorEnabled bool
 	AdminRoles            []string
 
@@ -317,7 +334,7 @@ func Load() Config {
 
 		JWKSEndpoint:          os.Getenv("JWKS_ENDPOINT"),
 		Issuer:                os.Getenv("JWT_ISSUER"),
-		Audience:              os.Getenv("JWT_AUDIENCE"),
+		Audiences:             parseList(os.Getenv("JWT_AUDIENCE")),
 		TokenValidatorEnabled: tokenValidatorEnabled,
 		AdminRoles:            parseList(os.Getenv("RBAC_ADMIN_ROLES")),
 
@@ -507,7 +524,12 @@ func (c Config) Validate() error {
 		if c.Issuer == "" {
 			return errors.New("JWT_ISSUER is required when TOKEN_VALIDATOR_ENABLED=true")
 		}
-		if c.Audience == "" {
+		// At least one audience. parseList drops blanks, so a JWT_AUDIENCE that
+		// is nothing but separators and spaces (" , ") lands here too rather
+		// than booting with a list of empty strings that no token can match --
+		// which would look like a working configuration and reject every
+		// request.
+		if len(c.Audiences) == 0 {
 			return errors.New("JWT_AUDIENCE is required when TOKEN_VALIDATOR_ENABLED=true")
 		}
 	}

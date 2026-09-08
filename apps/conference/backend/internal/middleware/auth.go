@@ -74,9 +74,16 @@ func (u *UserInfo) HasAnyGroup(want []string) bool {
 
 // AuthConfig holds JWT validation configuration.
 type AuthConfig struct {
-	JWKSEndpoint          string
-	Issuer                string
-	Audience              string
+	JWKSEndpoint string
+	Issuer       string
+	// Audiences is the set of `aud` values this deployment accepts, in
+	// OR fashion: a token is valid when its aud claim names at least one of
+	// them (see audienceAllowed). Several Asgardeo applications call this
+	// backend -- the attendee microapp and the service application the AI
+	// service uses for its own reads -- and each stamps its own client id as
+	// the audience, so a single accepted value would 401 every call from the
+	// others. Only consulted when TokenValidatorEnabled is true.
+	Audiences             []string
 	ClockSkew             time.Duration
 	TokenValidatorEnabled bool
 }
@@ -257,6 +264,77 @@ func WithUserInfo(ctx context.Context, user *UserInfo) context.Context {
 	return context.WithValue(ctx, userInfoKey, user)
 }
 
+// audienceAllowed reports, as an error or its absence, whether a token's `aud`
+// claim names at least one of the audiences this deployment accepts.
+//
+// This is deliberately hand-rolled instead of handed to jwt.WithAudience, and
+// the reason is a trap worth recording, because every way of getting it wrong
+// fails silently rather than loudly:
+//
+//   - In golang-jwt/jwt v5 (v5.3.1 is what go.mod pins), WithAudience is
+//     variadic and ASSIGNS its argument: `p.validator.expectedAud = aud`. So
+//     the intuitive "one call per accepted audience" -- WithAudience(a) then
+//     WithAudience(b) -- does not accumulate and does not error. The second
+//     call overwrites the first, `a` quietly stops being accepted, and the
+//     microapp's own tokens start 401ing the moment a second audience is added
+//     to the config. Nothing in the logs points at the option list.
+//   - A single variadic call, WithAudience(a, b), does mean "any of" today
+//     (the validator's expectAllAud defaults to false and verifyAudience
+//     returns nil on the first match), while WithAllAudiences(a, b) is the
+//     "all of" variant. Two constructors one word apart, differing only in an
+//     unexported bool, deciding whether this backend accepts one caller or
+//     none -- that is not a distinction worth resting the auth boundary on
+//     across a future dependency bump.
+//
+// Doing the comparison here makes the intended semantics -- OR, at least one
+// match -- readable at the call site and directly testable without minting
+// signed tokens through the whole parser.
+//
+// The empty/missing-aud case matches what the library does when an audience is
+// expected: reject. An `aud`-less token is one this backend cannot attribute to
+// any registered application, and accepting it would mean any token the IdP
+// ever issued, for any unrelated Asgardeo app in the org, is good enough to
+// read attendee session details.
+func audienceAllowed(tokenAud jwt.ClaimStrings, accepted []string) error {
+	// Defence in depth against a caller constructing AuthConfig by hand with
+	// the validator on and no audiences: config.Validate already refuses to
+	// boot in that state, and an empty accepted set must never read as
+	// "accept anything".
+	if len(accepted) == 0 {
+		return fmt.Errorf("token audience check: no accepted audiences configured")
+	}
+
+	// A JWT may carry aud as a bare string or an array; jwt.ClaimStrings
+	// normalises both to a slice. An array of one empty string is how some
+	// issuers spell "no audience", so it is filtered out here and treated as
+	// missing, the same as the library's own verifyAudience does.
+	present := make([]string, 0, len(tokenAud))
+	for _, a := range tokenAud {
+		if a != "" {
+			present = append(present, a)
+		}
+	}
+	if len(present) == 0 {
+		return fmt.Errorf("token has no aud claim; accepted audiences are %v", accepted)
+	}
+
+	for _, a := range present {
+		for _, want := range accepted {
+			if a == want {
+				return nil
+			}
+		}
+	}
+
+	// Both sides are named in the message on purpose: these are OAuth client
+	// ids, not secrets, and they are the whole content of the failure. Without
+	// them the log line says only "invalid token" and the on-call engineer
+	// cannot tell a wrong-application token from an expired one. The token
+	// itself is never logged -- it is a live bearer credential, and the caller
+	// (Auth) logs only this error.
+	return fmt.Errorf("token audience %v is not among the accepted audiences %v", present, accepted)
+}
+
 func extractUserInfo(tokenStr string, cfg AuthConfig, keyFunc jwt.Keyfunc) (*UserInfo, error) {
 	var c jwtClaims
 
@@ -265,9 +343,13 @@ func extractUserInfo(tokenStr string, cfg AuthConfig, keyFunc jwt.Keyfunc) (*Use
 			return nil, fmt.Errorf("decode token: %w", err)
 		}
 	} else {
+		// No jwt.WithAudience here on purpose -- the audience is checked below
+		// by audienceAllowed. Everything else (signature via keyFunc, issuer,
+		// clock skew, a mandatory exp) stays with the library exactly as
+		// before; only the aud comparison moves out. See audienceAllowed for
+		// why.
 		token, err := jwt.ParseWithClaims(tokenStr, &c, keyFunc,
 			jwt.WithIssuer(cfg.Issuer),
-			jwt.WithAudience(cfg.Audience),
 			jwt.WithLeeway(cfg.ClockSkew),
 			jwt.WithExpirationRequired(),
 		)
@@ -276,6 +358,13 @@ func extractUserInfo(tokenStr string, cfg AuthConfig, keyFunc jwt.Keyfunc) (*Use
 		}
 		if !token.Valid {
 			return nil, fmt.Errorf("invalid token")
+		}
+		// Ordered after ParseWithClaims so an unsigned, expired or
+		// wrong-issuer token is rejected on those grounds first and its aud
+		// claim -- which at that point is attacker-controlled text -- is never
+		// the thing we reason about, nor the thing we put in a log line.
+		if err := audienceAllowed(c.Audience, cfg.Audiences); err != nil {
+			return nil, err
 		}
 	}
 

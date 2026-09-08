@@ -13,7 +13,13 @@ schemaVersion: 1.2
 #   TOKEN_VALIDATOR_ENABLED=true   turns on JWT signature + expiry verification
 #   JWKS_ENDPOINT                  JWKS URL to fetch signing keys from
 #   JWT_ISSUER                     expected `iss` claim
-#   JWT_AUDIENCE                   expected `aud` claim
+#   JWT_AUDIENCE                   accepted `aud` claims -- a comma-separated
+#                                  list of Asgardeo client ids; a token passes
+#                                  if its aud matches ANY one of them. Needs
+#                                  every application that calls this backend:
+#                                  the attendee microapp and the service
+#                                  application the AI service uses for its own
+#                                  reads. A single value still works unchanged.
 # Confirm the exact JWKS/issuer/audience with the platform team (they depend on
 # whether the gateway forwards the IdP token or substitutes its own assertion).
 #
