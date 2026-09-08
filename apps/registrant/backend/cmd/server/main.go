@@ -119,7 +119,7 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	api := r.Group("")
+	api := r.Group("/registrant")
 	api.Use(middleware.JwtInterceptor())
 	{
 		api.GET("/events/current/agendas", agendaH.ListCurrentAgendas)
