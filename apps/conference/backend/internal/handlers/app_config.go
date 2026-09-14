@@ -149,7 +149,18 @@ func NewAppConfigHandler(
 
 // List handles GET /app-configs, returning every row verbatim regardless of
 // what any given key means -- no filtering, no pagination.
+//
+// The response is per caller (see applyAccessRule), so it is never stored by
+// any cache. RFC 9111 3.5 already keeps a compliant shared cache off a
+// response to an Authorization-bearing request, but that is a rule about
+// caches behaving, not a header on the response, and what is at stake is one
+// attendee being served another's answer about which screens they may see.
+// no-store says it outright, and it is stated here rather than in a
+// route-local middleware so that it cannot be lost by a reordering of
+// main.go's route table.
 func (h *AppConfigHandler) List(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+
 	configs, err := h.configs.List(c.Request.Context())
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "fetching app configs failed", "error", err)

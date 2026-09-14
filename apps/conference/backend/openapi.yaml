@@ -998,10 +998,11 @@ paths:
         A row this rule leaves standing is returned byte for byte as stored, so
         a value spelled `true` or `on` still arrives spelled that way; only a
         row the rule overturns is rewritten, and then to `"1"` or `"0"`.
-        Consequence for caching: do not put a shared cache in front of this
-        endpoint keyed on the path alone. It carries no `Cache-Control` and no
-        `ETag` for exactly this reason, unlike the routes marked cacheable
-        elsewhere in this file.
+        Consequence for caching: this response is never stored. It answers
+        `Cache-Control: no-store` and carries no `ETag`, unlike the routes
+        marked cacheable elsewhere in this file -- keying a shared cache on the
+        path alone would replay one caller's answer about which screens they
+        may see to a different caller.
       responses:
         "200":
           description: "OK"

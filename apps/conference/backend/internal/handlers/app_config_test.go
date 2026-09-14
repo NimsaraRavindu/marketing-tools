@@ -19,6 +19,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -698,5 +699,50 @@ func TestAppConfigHandler_List_NilMembershipGrantsRatherThanRefuses(t *testing.T
 	got := decodeAppConfigs(t, w.Body.Bytes())
 	if got[features.Shop.EnabledKey()] != "1" {
 		t.Errorf("%s = %q, want \"1\"", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
+	}
+}
+
+// The response says different things to different callers, so it must not be
+// stored by anything. Asserted on the error path too: the 500 is written from
+// a different branch, and a header set on only one of them is a header that
+// goes missing the day the database is down.
+func TestAppConfigHandler_List_IsNeverCached(t *testing.T) {
+	feats := &fakeFeatureSnapshotter{
+		states: map[features.Feature]features.State{features.Shop: {Feature: features.Shop, Enabled: true}},
+	}
+
+	tests := []struct {
+		name   string
+		reader *fakeAppConfigReader
+		status int
+	}{
+		{
+			name: "served",
+			reader: &fakeAppConfigReader{configs: []models.AppConfig{
+				{Key: features.Shop.EnabledKey(), Value: "1", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
+			}},
+			status: http.StatusOK,
+		},
+		{
+			name:   "lookup failed",
+			reader: &fakeAppConfigReader{err: errors.New("boom")},
+			status: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewAppConfigHandler(tt.reader, feats, nil, "")
+			r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "someone@example.com"})
+
+			w := doRequest(r, http.MethodGet, "/app-configs", nil)
+
+			if w.Code != tt.status {
+				t.Fatalf("status = %d, want %d", w.Code, tt.status)
+			}
+			if got := w.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("Cache-Control = %q, want %q", got, "no-store")
+			}
+		})
 	}
 }
