@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"wso2-coin-backend/internal/features"
+	"wso2-coin-backend/internal/middleware"
 	"wso2-coin-backend/internal/models"
 )
 
@@ -82,6 +83,13 @@ var redactedConfigKeys = map[string]struct{}{
 // answer identically.
 const shopHiddenDefault = "0"
 
+// How an is_<feature>_enabled row spells its two states. The microapp reads
+// these as strings, not booleans, because every app_config value is text.
+const (
+	featureEnabled  = "1"
+	featureDisabled = "0"
+)
+
 // AppConfigReader is satisfied by *repository.AppConfigRepo.
 type AppConfigReader interface {
 	List(ctx context.Context) ([]models.AppConfig, error)
@@ -90,6 +98,14 @@ type AppConfigReader interface {
 // FeatureSnapshotter is the slice of *features.Resolver this handler needs.
 type FeatureSnapshotter interface {
 	Snapshot(ctx context.Context) map[features.Feature]features.State
+	// BypassesGates reports whether this caller is on the app_config
+	// allowlist (features.GateBypassEmailsKey). Part of this interface for
+	// the same reason middleware.FeatureGateResolver carries it rather than
+	// sniffing for it with a type assertion: a resolver that cannot answer
+	// it would silently take the bypass away, and the symptom -- a tester
+	// who still sees a hidden screen -- looks like a wrong row rather than
+	// like missing wiring.
+	BypassesGates(ctx context.Context, email string) bool
 }
 
 // AppConfigHandler exposes the read-only app-configs HTTP endpoint. There is
@@ -121,8 +137,18 @@ func (h *AppConfigHandler) List(c *gin.Context) {
 		configs = []models.AppConfig{}
 	}
 
+	// One read of the resolver for the whole response, so the rows this
+	// endpoint synthesises and the rows the bypass overrides can never
+	// disagree about which features exist or what state they are in.
+	ctx := c.Request.Context()
+	var snapshot map[features.Feature]features.State
+	if h.features != nil {
+		snapshot = h.features.Snapshot(ctx)
+	}
+
 	configs = redact(configs)
-	configs = h.withDefaults(c.Request.Context(), configs)
+	configs = withDefaults(snapshot, configs)
+	configs = h.unhideForBypass(ctx, snapshot, configs)
 
 	if h.merchantWalletAddress != "" {
 		configs = append(configs, models.AppConfig{
@@ -152,6 +178,83 @@ func redact(configs []models.AppConfig) []models.AppConfig {
 	return kept
 }
 
+// unhideForBypass reports every feature as enabled to a caller on the
+// features.GateBypassEmailsKey allowlist, leaving the response untouched for
+// everybody else.
+//
+// This is the client-side half of the bypass that middleware.FeatureGate
+// already implements for routes. Without it the allowlist opens the endpoints
+// behind an unannounced feature but the microapp still hides the screen in
+// front of them, because the screen is hidden by the very rows this endpoint
+// serves -- so the only way to click through a switched-off feature was to
+// flip is_<feature>_enabled, which shows it to every attendee at the same
+// time. That is exactly the state the allowlist exists to avoid.
+//
+// Overriding, not defaulting: the stored rows say '0' and they say it on
+// purpose, so unlike withDefaults this must beat a row that exists. It runs
+// after withDefaults for that reason -- a synthesised flag and a stored one
+// are equally in the way of a tester.
+//
+// Only is_<feature>_enabled keys are touched, and only for features the
+// resolver knows about. is_shop_hidden looks like a flag and is not one (see
+// ShopHiddenKey): it is presentational, it gates no route, so the bypass has
+// no business reshuffling the tab bar. The coming-soon title and message rows
+// are left alone too -- they are what the microapp renders *instead of* the
+// screen, and a client reading enabled='1' never reaches them.
+//
+// The allowlist is consulted only after the response is otherwise built, so an
+// ordinary attendee's request pays one map lookup for a feature that is not
+// for them.
+//
+// A nil user is not on the list. GET /app-configs sits on the authenticated
+// group, so nil means someone reordered the middleware; unlike the handlers
+// that answer 401 on it, this one keeps serving -- the flags are the same for
+// every attendee and refusing them would black out the whole microapp -- but
+// it grants no bypass to a caller it cannot name.
+func (h *AppConfigHandler) unhideForBypass(
+	ctx context.Context,
+	snapshot map[features.Feature]features.State,
+	configs []models.AppConfig,
+) []models.AppConfig {
+	if h.features == nil || len(snapshot) == 0 {
+		return configs
+	}
+
+	user := middleware.UserInfoFromContext(ctx)
+	if user == nil || !h.features.BypassesGates(ctx, user.Email) {
+		return configs
+	}
+
+	enabledKeys := make(map[string]struct{}, len(snapshot))
+	for f := range snapshot {
+		enabledKeys[f.EnabledKey()] = struct{}{}
+	}
+
+	unhidden := make([]string, 0, len(snapshot))
+	for i := range configs {
+		if _, isFlag := enabledKeys[configs[i].Key]; !isFlag {
+			continue
+		}
+		if configs[i].Value == featureEnabled {
+			continue
+		}
+		configs[i].Value = featureEnabled
+		unhidden = append(unhidden, configs[i].Key)
+	}
+
+	if len(unhidden) > 0 {
+		// Warn, not Info, and for the same reason FeatureGate warns when it
+		// lets one of these callers past: a feature the operator switched off
+		// is being shown, which is correct here but is also the shape of an
+		// allowlist someone forgot to clear. The addresses stay out of the
+		// log -- the row already holds them and a log aggregator should not.
+		slog.WarnContext(ctx, "reporting disabled features as enabled to an allowlisted caller",
+			"keys", unhidden)
+	}
+
+	return configs
+}
+
 // withDefaults appends a row for every key the microapp expects to always be
 // there but which the table does not hold, so it receives a complete set
 // against a database that has not been seeded (or that is behind on
@@ -173,9 +276,10 @@ func redact(configs []models.AppConfig) []models.AppConfig {
 //     They are not features, so nothing about them depends on the resolver
 //     and they must be emitted even when this handler was built without one.
 //   - Feature-flag keys come from the resolver snapshot and are therefore
-//     skipped when features is nil, in which case the response is exactly
-//     what the table holds plus the presentational defaults.
-func (h *AppConfigHandler) withDefaults(ctx context.Context, configs []models.AppConfig) []models.AppConfig {
+//     skipped when it is empty -- which is what a handler built without a
+//     resolver passes -- in which case the response is exactly what the
+//     table holds plus the presentational defaults.
+func withDefaults(snapshot map[features.Feature]features.State, configs []models.AppConfig) []models.AppConfig {
 	present := make(map[string]struct{}, len(configs))
 	for _, cfg := range configs {
 		present[cfg.Key] = struct{}{}
@@ -191,16 +295,14 @@ func (h *AppConfigHandler) withDefaults(ctx context.Context, configs []models.Ap
 
 	appendIfMissing(ShopHiddenKey, shopHiddenDefault)
 
-	if h.features != nil {
-		for f, state := range h.features.Snapshot(ctx) {
-			enabled := "0"
-			if state.Enabled {
-				enabled = "1"
-			}
-			appendIfMissing(f.EnabledKey(), enabled)
-			appendIfMissing(f.TitleKey(), state.Title)
-			appendIfMissing(f.MessageKey(), state.Message)
+	for f, state := range snapshot {
+		enabled := featureDisabled
+		if state.Enabled {
+			enabled = featureEnabled
 		}
+		appendIfMissing(f.EnabledKey(), enabled)
+		appendIfMissing(f.TitleKey(), state.Title)
+		appendIfMissing(f.MessageKey(), state.Message)
 	}
 
 	// Snapshot is a map, so the synthesised rows arrive in a random order.

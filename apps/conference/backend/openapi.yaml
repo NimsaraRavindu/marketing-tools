@@ -960,10 +960,26 @@ paths:
         addresses and this endpoint answers every authenticated attendee, so
         the handler drops the row rather than blanking it -- a client sees the
         key exactly the way it already sees an unseeded one, and nothing on the
-        client reads it. Inspect it with SQL. It changes no value here: a
-        feature the allowlist opens up still reports
-        `is_<feature>_enabled: "0"`, which is the point -- the screen stays
-        hidden for everybody while the endpoints answer the listed callers.
+        client reads it. Inspect it with SQL.
+        That row does, however, change what a listed caller is told about every
+        other feature: this response is per caller. To an address on the
+        allowlist, every `is_<feature>_enabled` key reports `"1"` whatever the
+        row says, so the microapp stops hiding the screens whose routes the
+        feature gate is already letting that caller through; to everybody else
+        the stored value is returned unchanged. It is the client-side half of
+        the same exemption -- without it the allowlist opens the endpoints
+        behind an unannounced feature while the app still hides the screen in
+        front of them, and the only way to click through would be to flip the
+        flag for every attendee at once. Only the `is_<feature>_enabled` keys
+        move: the coming-soon title and message rows are returned as stored (a
+        client reading `"1"` never renders them), and `is_shop_hidden` is
+        presentational, gates no route, and is left alone. Nothing else in the
+        response varies by caller, and being on the allowlist never reveals
+        who else is: the row itself stays dropped.
+        Consequence for caching: do not put a shared cache in front of this
+        endpoint keyed on the path alone. It carries no `Cache-Control` and no
+        `ETag` for exactly this reason, unlike the routes marked cacheable
+        elsewhere in this file.
       responses:
         "200":
           description: "OK"
