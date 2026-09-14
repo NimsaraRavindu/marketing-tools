@@ -26,6 +26,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"wso2-coin-backend/internal/features"
+	"wso2-coin-backend/internal/middleware"
 	"wso2-coin-backend/internal/models"
 )
 
@@ -38,8 +39,23 @@ func (f *fakeAppConfigReader) List(ctx context.Context) ([]models.AppConfig, err
 	return f.configs, f.err
 }
 
+// newAppConfigTestRouter serves the endpoint to an unidentified caller, which
+// is what most of these tests are about: the response every attendee gets.
 func newAppConfigTestRouter(h *AppConfigHandler) *gin.Engine {
+	return newAppConfigTestRouterAs(h, nil)
+}
+
+// newAppConfigTestRouterAs serves it to a named caller, standing in for the
+// Auth middleware that populates the context in production. A nil user leaves
+// the context empty, the way a reordered middleware stack would.
+func newAppConfigTestRouterAs(h *AppConfigHandler, user *middleware.UserInfo) *gin.Engine {
 	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		if user != nil {
+			c.Request = c.Request.WithContext(middleware.WithUserInfo(c.Request.Context(), user))
+		}
+		c.Next()
+	})
 	r.GET("/app-configs", h.List)
 	return r
 }
@@ -112,10 +128,17 @@ func TestAppConfigHandler_List_RepoErrorMapsTo500(t *testing.T) {
 // fakeFeatureSnapshotter stands in for *features.Resolver.
 type fakeFeatureSnapshotter struct {
 	states map[features.Feature]features.State
+	// bypass is the set of addresses this stand-in reports as allowlisted,
+	// already case-folded the way features.Resolver stores them.
+	bypass map[string]bool
 }
 
 func (f *fakeFeatureSnapshotter) Snapshot(context.Context) map[features.Feature]features.State {
 	return f.states
+}
+
+func (f *fakeFeatureSnapshotter) BypassesGates(_ context.Context, email string) bool {
+	return f.bypass[strings.ToLower(email)]
 }
 
 // The microapp must be able to read a feature's state even when nobody has
@@ -352,5 +375,180 @@ func TestRedactPreservesTheSurvivingRowsInOrder(t *testing.T) {
 		if got[i].Key != w.key || got[i].Value != w.value {
 			t.Errorf("row %d = %s/%s, want %s/%s", i, got[i].Key, got[i].Value, w.key, w.value)
 		}
+	}
+}
+
+// The point of the whole mechanism: an allowlisted caller is told a switched
+// off feature is on, so the microapp stops hiding the screen whose routes
+// middleware.FeatureGate is already letting them through. The stored '0' is
+// overridden, not merely defaulted -- the row exists and says the opposite.
+func TestAppConfigHandler_List_BypassReportsDisabledFeaturesAsEnabled(t *testing.T) {
+	reader := &fakeAppConfigReader{configs: []models.AppConfig{
+		{Key: features.Shop.EnabledKey(), Value: "0", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
+		{Key: "cache_version", Value: "7", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
+	}}
+	feats := &fakeFeatureSnapshotter{
+		states: map[features.Feature]features.State{
+			features.Shop:   {Feature: features.Shop, Enabled: false, Title: "Soon", Message: "Not yet"},
+			features.AIChat: {Feature: features.AIChat, Enabled: false, Title: "Later", Message: "Much later"},
+		},
+		bypass: map[string]bool{"tester@wso2.com": true},
+	}
+	h := NewAppConfigHandler(reader, feats, "")
+	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "tester@wso2.com"})
+
+	w := doRequest(r, http.MethodGet, "/app-configs", nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	got := decodeAppConfigs(t, w.Body.Bytes())
+
+	// The stored row.
+	if got[features.Shop.EnabledKey()] != "1" {
+		t.Errorf("%s = %q, want \"1\"", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
+	}
+	// The row withDefaults synthesised -- equally in the way of a tester.
+	if got[features.AIChat.EnabledKey()] != "1" {
+		t.Errorf("%s = %q, want \"1\"", features.AIChat.EnabledKey(), got[features.AIChat.EnabledKey()])
+	}
+	// Everything else is untouched: this grants visibility, not edit rights.
+	if got["cache_version"] != "7" {
+		t.Errorf("cache_version = %q, want \"7\"", got["cache_version"])
+	}
+	// The coming-soon copy still ships. A client reading enabled="1" never
+	// renders it, and blanking it would break the client that ignores the flag.
+	if got[features.Shop.MessageKey()] != "Not yet" {
+		t.Errorf("%s = %q, want %q", features.Shop.MessageKey(), got[features.Shop.MessageKey()], "Not yet")
+	}
+}
+
+// The flags an ordinary attendee sees must not move because somebody else is
+// on the list. This is the assertion that says the bypass stayed per caller.
+func TestAppConfigHandler_List_BypassLeavesEveryoneElseAlone(t *testing.T) {
+	rows := []models.AppConfig{
+		{Key: features.Shop.EnabledKey(), Value: "0", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
+	}
+	feats := func() *fakeFeatureSnapshotter {
+		return &fakeFeatureSnapshotter{
+			states: map[features.Feature]features.State{
+				features.Shop: {Feature: features.Shop, Enabled: false, Title: "Soon", Message: "Not yet"},
+			},
+			bypass: map[string]bool{"tester@wso2.com": true},
+		}
+	}
+
+	tests := []struct {
+		name string
+		user *middleware.UserInfo
+	}{
+		{name: "a different attendee", user: &middleware.UserInfo{Email: "someone@example.com"}},
+		{name: "a token with no email claim", user: &middleware.UserInfo{Email: ""}},
+		// Auth populates the context in production, so this is the
+		// reordered-middleware case: serve the flags, grant no bypass.
+		{name: "no user in context", user: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewAppConfigHandler(&fakeAppConfigReader{configs: rows}, feats(), "")
+			r := newAppConfigTestRouterAs(h, tt.user)
+
+			w := doRequest(r, http.MethodGet, "/app-configs", nil)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+			}
+			got := decodeAppConfigs(t, w.Body.Bytes())
+			if got[features.Shop.EnabledKey()] != "0" {
+				t.Errorf("%s = %q, want \"0\"", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
+			}
+		})
+	}
+}
+
+// The allowlist is matched case-insensitively by features.Resolver because no
+// IdP treats an address as case-sensitive; this endpoint must not reintroduce
+// a case dependency by folding the claim differently from the gate.
+func TestAppConfigHandler_List_BypassMatchesEmailCaseInsensitively(t *testing.T) {
+	feats := &fakeFeatureSnapshotter{
+		states: map[features.Feature]features.State{
+			features.Shop: {Feature: features.Shop, Enabled: false, Title: "Soon", Message: "Not yet"},
+		},
+		bypass: map[string]bool{"tester@wso2.com": true},
+	}
+	h := NewAppConfigHandler(&fakeAppConfigReader{}, feats, "")
+	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "Tester@WSO2.com"})
+
+	w := doRequest(r, http.MethodGet, "/app-configs", nil)
+
+	got := decodeAppConfigs(t, w.Body.Bytes())
+	if got[features.Shop.EnabledKey()] != "1" {
+		t.Errorf("%s = %q, want \"1\"", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
+	}
+}
+
+// is_shop_hidden ends in neither _enabled nor a feature name, and it gates no
+// route, so the bypass has no business reshuffling the tab bar for a tester.
+func TestAppConfigHandler_List_BypassLeavesPresentationalKeysAlone(t *testing.T) {
+	reader := &fakeAppConfigReader{configs: []models.AppConfig{
+		{Key: ShopHiddenKey, Value: "1", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
+	}}
+	feats := &fakeFeatureSnapshotter{
+		states: map[features.Feature]features.State{
+			features.Shop: {Feature: features.Shop, Enabled: false, Title: "Soon", Message: "Not yet"},
+		},
+		bypass: map[string]bool{"tester@wso2.com": true},
+	}
+	h := NewAppConfigHandler(reader, feats, "")
+	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "tester@wso2.com"})
+
+	w := doRequest(r, http.MethodGet, "/app-configs", nil)
+
+	got := decodeAppConfigs(t, w.Body.Bytes())
+	if got[ShopHiddenKey] != "1" {
+		t.Errorf("%s = %q, want \"1\" -- presentational, not a gate", ShopHiddenKey, got[ShopHiddenKey])
+	}
+}
+
+// The allowlist row itself stays out of the response for a caller who is on
+// it. Being allowlisted grants a view of the features, never of who else is.
+func TestAppConfigHandler_List_BypassDoesNotUnredactTheAllowlist(t *testing.T) {
+	reader := &fakeAppConfigReader{configs: []models.AppConfig{
+		{Key: features.GateBypassEmailsKey, Value: "tester@wso2.com", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
+	}}
+	feats := &fakeFeatureSnapshotter{
+		states: map[features.Feature]features.State{
+			features.Shop: {Feature: features.Shop, Enabled: false, Title: "Soon", Message: "Not yet"},
+		},
+		bypass: map[string]bool{"tester@wso2.com": true},
+	}
+	h := NewAppConfigHandler(reader, feats, "")
+	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "tester@wso2.com"})
+
+	w := doRequest(r, http.MethodGet, "/app-configs", nil)
+
+	if strings.Contains(w.Body.String(), features.GateBypassEmailsKey) {
+		t.Errorf("allowlist row leaked to an allowlisted caller: %s", w.Body.String())
+	}
+}
+
+// A handler built without a resolver cannot answer "who bypasses", and must
+// serve the table rather than panic on the nil interface.
+func TestAppConfigHandler_List_BypassNoopsWithoutAResolver(t *testing.T) {
+	reader := &fakeAppConfigReader{configs: []models.AppConfig{
+		{Key: features.Shop.EnabledKey(), Value: "0", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
+	}}
+	h := NewAppConfigHandler(reader, nil, "")
+	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "tester@wso2.com"})
+
+	w := doRequest(r, http.MethodGet, "/app-configs", nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	got := decodeAppConfigs(t, w.Body.Bytes())
+	if got[features.Shop.EnabledKey()] != "0" {
+		t.Errorf("%s = %q, want \"0\"", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
 	}
 }
