@@ -108,20 +108,43 @@ type FeatureSnapshotter interface {
 	BypassesGates(ctx context.Context, email string) bool
 }
 
+// AttendeeMembership is the slice of *features.Membership this handler needs,
+// and the same interface middleware.FeatureGate takes: the two must agree
+// about who is registered, or the microapp hides a screen whose routes answer
+// (or, worse, shows one whose routes do not).
+type AttendeeMembership interface {
+	IsAttendee(ctx context.Context, email string) bool
+}
+
 // AppConfigHandler exposes the read-only app-configs HTTP endpoint. There is
 // no write route through this API, matching the old service exactly (see
 // .claude/PLAN.md).
 type AppConfigHandler struct {
 	configs               AppConfigReader
 	features              FeatureSnapshotter
+	members               AttendeeMembership
 	merchantWalletAddress string
 }
 
 // NewAppConfigHandler constructs an AppConfigHandler. features may be nil, in
-// which case no feature-flag rows are synthesised and the response is the
-// table's rows plus the presentational defaults withDefaults always emits.
-func NewAppConfigHandler(configs AppConfigReader, feats FeatureSnapshotter, merchantWalletAddress string) *AppConfigHandler {
-	return &AppConfigHandler{configs: configs, features: feats, merchantWalletAddress: merchantWalletAddress}
+// which case no feature-flag rows are synthesised, no rule is applied on top
+// of the table, and the response is the table's rows plus the presentational
+// defaults withDefaults always emits. members may be nil too, and is read as
+// "cannot tell who is registered", which grants rather than refuses -- the
+// same direction features.Membership takes on a failed lookup, and for the
+// same reason.
+func NewAppConfigHandler(
+	configs AppConfigReader,
+	feats FeatureSnapshotter,
+	members AttendeeMembership,
+	merchantWalletAddress string,
+) *AppConfigHandler {
+	return &AppConfigHandler{
+		configs:               configs,
+		features:              feats,
+		members:               members,
+		merchantWalletAddress: merchantWalletAddress,
+	}
 }
 
 // List handles GET /app-configs, returning every row verbatim regardless of
@@ -148,7 +171,7 @@ func (h *AppConfigHandler) List(c *gin.Context) {
 
 	configs = redact(configs)
 	configs = withDefaults(snapshot, configs)
-	configs = h.unhideForBypass(ctx, snapshot, configs)
+	configs = h.applyAccessRule(ctx, snapshot, configs)
 
 	if h.merchantWalletAddress != "" {
 		configs = append(configs, models.AppConfig{
@@ -178,40 +201,55 @@ func redact(configs []models.AppConfig) []models.AppConfig {
 	return kept
 }
 
-// unhideForBypass reports every feature as enabled to a caller on the
-// features.GateBypassEmailsKey allowlist, leaving the response untouched for
-// everybody else.
+// applyAccessRule rewrites every is_<feature>_enabled row to what this
+// particular caller is actually served, so that the screen the microapp shows
+// and the routes middleware.FeatureGate answers agree. Both evaluate
+// features.Grant.Allowed; this is the half the client sees.
 //
-// This is the client-side half of the bypass that middleware.FeatureGate
-// already implements for routes. Without it the allowlist opens the endpoints
-// behind an unannounced feature but the microapp still hides the screen in
-// front of them, because the screen is hidden by the very rows this endpoint
-// serves -- so the only way to click through a switched-off feature was to
-// flip is_<feature>_enabled, which shows it to every attendee at the same
-// time. That is exactly the state the allowlist exists to avoid.
+// It makes the response per caller in two directions:
 //
-// Overriding, not defaulting: the stored rows say '0' and they say it on
-// purpose, so unlike withDefaults this must beat a row that exists. It runs
-// after withDefaults for that reason -- a synthesised flag and a stored one
-// are equally in the way of a tester.
+//   - Up, for an address on features.GateBypassEmailsKey. Without it the
+//     allowlist opens the endpoints behind an unannounced feature while the
+//     app still hides the screen in front of them, and the only way to click
+//     through would be to flip the flag for every attendee at once -- which
+//     is the state the allowlist exists to avoid.
+//   - Down, for a caller with no row in attendees. They are told what they
+//     would be told if the feature were switched off, because from where they
+//     stand it is. Hiding the screen matters more here than closing the route:
+//     a screen that renders and then 503s on its first fetch is a worse answer
+//     than the coming-soon copy.
+//
+// Overriding, not defaulting: the stored rows say what they say on purpose, so
+// unlike withDefaults this must beat a row that exists. It runs after
+// withDefaults for that reason -- a synthesised flag and a stored one are
+// equally in the caller's way.
+//
+// The stored row stays the authority on whether the feature is on, and the
+// snapshot answers only for a row the table does not hold or spells in a way
+// features.ParseEnabled makes nothing of. The rows this handler serves come
+// straight from AppConfigRepo.List and are therefore up to DefaultTTL fresher
+// than the snapshot; taking the flag from the snapshot instead would mean an
+// operator who has just switched a feature on watches this endpoint report it
+// off again for the next half minute.
+//
+// A row whose value the rule leaves standing is passed through byte for byte,
+// so "true" stays "true" for the client that has always received it. Only a
+// row the rule actually overturns is rewritten, and then to "1" or "0", which
+// is what openapi.yaml documents.
 //
 // Only is_<feature>_enabled keys are touched, and only for features the
 // resolver knows about. is_shop_hidden looks like a flag and is not one (see
-// ShopHiddenKey): it is presentational, it gates no route, so the bypass has
-// no business reshuffling the tab bar. The coming-soon title and message rows
-// are left alone too -- they are what the microapp renders *instead of* the
-// screen, and a client reading enabled='1' never reaches them.
+// ShopHiddenKey): it is presentational, it gates no route, so neither half of
+// the rule has any business reshuffling the tab bar. The coming-soon title and
+// message rows are left alone too -- they are what the microapp renders
+// *instead of* the screen, and a client reading "1" never reaches them.
 //
-// The allowlist is consulted only after the response is otherwise built, so an
-// ordinary attendee's request pays one map lookup for a feature that is not
-// for them.
-//
-// A nil user is not on the list. GET /app-configs sits on the authenticated
-// group, so nil means someone reordered the middleware; unlike the handlers
-// that answer 401 on it, this one keeps serving -- the flags are the same for
-// every attendee and refusing them would black out the whole microapp -- but
-// it grants no bypass to a caller it cannot name.
-func (h *AppConfigHandler) unhideForBypass(
+// A nil user is neither allowlisted nor registered. GET /app-configs sits on
+// the authenticated group, so nil means someone reordered the middleware;
+// unlike the handlers that answer 401 on it, this one keeps serving -- an
+// attendee who cannot read the config has no app at all -- but it grants no
+// bypass to a caller it cannot name.
+func (h *AppConfigHandler) applyAccessRule(
 	ctx context.Context,
 	snapshot map[features.Feature]features.State,
 	configs []models.AppConfig,
@@ -220,36 +258,74 @@ func (h *AppConfigHandler) unhideForBypass(
 		return configs
 	}
 
-	user := middleware.UserInfoFromContext(ctx)
-	if user == nil || !h.features.BypassesGates(ctx, user.Email) {
-		return configs
+	var email string
+	if user := middleware.UserInfoFromContext(ctx); user != nil {
+		email = user.Email
 	}
 
-	enabledKeys := make(map[string]struct{}, len(snapshot))
-	for f := range snapshot {
-		enabledKeys[f.EnabledKey()] = struct{}{}
+	bypasses := email != "" && h.features.BypassesGates(ctx, email)
+
+	// Registered is worth the lookup only when it can change an answer, and
+	// the allowlist already settles it. A nil members grants, matching the
+	// direction features.Membership takes when it cannot reach the table:
+	// a component that cannot tell who is registered must not black out
+	// every screen.
+	registered := true
+	if !bypasses && h.members != nil {
+		registered = h.members.IsAttendee(ctx, email)
 	}
 
-	unhidden := make([]string, 0, len(snapshot))
+	// Which keys are flags, and what the snapshot would say about each if
+	// the row itself does not parse.
+	fallback := make(map[string]bool, len(snapshot))
+	for f, state := range snapshot {
+		fallback[f.EnabledKey()] = state.Enabled
+	}
+
+	var opened, closed []string
 	for i := range configs {
-		if _, isFlag := enabledKeys[configs[i].Key]; !isFlag {
+		snapshotEnabled, isFlag := fallback[configs[i].Key]
+		if !isFlag {
 			continue
 		}
-		if configs[i].Value == featureEnabled {
+
+		enabled, parsed := features.ParseEnabled(configs[i].Value)
+		if !parsed {
+			enabled = snapshotEnabled
+		}
+
+		allowed := features.Grant{
+			Enabled:    enabled,
+			Registered: registered,
+			Bypasses:   bypasses,
+		}.Allowed()
+		if allowed == enabled {
 			continue
 		}
-		configs[i].Value = featureEnabled
-		unhidden = append(unhidden, configs[i].Key)
+
+		if allowed {
+			opened = append(opened, configs[i].Key)
+			configs[i].Value = featureEnabled
+		} else {
+			closed = append(closed, configs[i].Key)
+			configs[i].Value = featureDisabled
+		}
 	}
 
-	if len(unhidden) > 0 {
-		// Warn, not Info, and for the same reason FeatureGate warns when it
-		// lets one of these callers past: a feature the operator switched off
-		// is being shown, which is correct here but is also the shape of an
-		// allowlist someone forgot to clear. The addresses stay out of the
-		// log -- the row already holds them and a log aggregator should not.
+	// Warn on the widening, for the reason FeatureGate warns when it lets an
+	// allowlisted caller past: a feature the operator switched off is being
+	// shown, which is correct here and is also the shape of an allowlist
+	// somebody forgot to clear. The narrowing is Info -- it is the
+	// attendee check doing exactly its job, once per unregistered caller per
+	// request. Neither logs the address: the allowlist row already holds the
+	// ones that matter and a log aggregator should not.
+	if len(opened) > 0 {
 		slog.WarnContext(ctx, "reporting disabled features as enabled to an allowlisted caller",
-			"keys", unhidden)
+			"keys", opened)
+	}
+	if len(closed) > 0 {
+		slog.InfoContext(ctx, "reporting enabled features as disabled to an unregistered caller",
+			"keys", closed)
 	}
 
 	return configs

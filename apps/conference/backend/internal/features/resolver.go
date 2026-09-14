@@ -150,11 +150,19 @@ func featureFromEnabledKey(key string) (Feature, bool) {
 	return Feature(name), true
 }
 
-// parseEnabled reads the stored spelling of a boolean. "1"/"0" is what the
+// ParseEnabled reads the stored spelling of a boolean, reporting false for a
+// value it makes nothing of so the caller can fall back to a default rather
+// than to "off".
+//
+// Exported because handlers.AppConfigHandler must read a flag row exactly the
+// way the resolver read it: that handler serves the table's own rows, which
+// can be up to DefaultTTL fresher than the snapshot, and a second opinion
+// about what "yes" means would show one answer on the screen and enforce
+// another at the gate. "1"/"0" is what the
 // rows that predate this package use and what the microapp writes its own
 // coercion against; the word forms are accepted because a human editing the
 // table by hand reaches for them.
-func parseEnabled(v string) (bool, bool) {
+func ParseEnabled(v string) (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "on":
 		return true, true
@@ -207,7 +215,7 @@ func apply(rows []models.AppConfig) *snapshot {
 
 	for f, s := range out.states {
 		if v, ok := byKey[f.EnabledKey()]; ok {
-			if enabled, parsed := parseEnabled(v); parsed {
+			if enabled, parsed := ParseEnabled(v); parsed {
 				s.Enabled = enabled
 			}
 		}

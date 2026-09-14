@@ -158,6 +158,12 @@ func main() {
 	// source of truth. It caches for features.DefaultTTL, which is the lag
 	// between flipping a row and the API acting on it.
 	featureResolver := features.NewResolver(appConfigRepo)
+	// Answers "is this caller a registered attendee", which is part of every
+	// feature decision (features.Grant.Allowed). Shared by the gate
+	// middleware and the /app-configs handler so the two cannot disagree
+	// about who is registered, and cached so that asking it per request is
+	// not a query per request.
+	attendeeMembership := features.NewMembership(attendeeProfileRepo)
 
 	qrPortalClient := qrportal.NewClient(cfg.QRPortal)
 	walletClient := wallet.NewClient(cfg.Wallet)
@@ -196,7 +202,7 @@ func main() {
 	connectionHandler := handlers.NewConnectionHandler(connectionRepo, attendeeProfileRepo)
 	favoritesHandler := handlers.NewFavoritesHandler(favoritesRepo)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackRepo, eventRepo)
-	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo, featureResolver, cfg.ShopMasterWalletAddress)
+	appConfigHandler := handlers.NewAppConfigHandler(appConfigRepo, featureResolver, attendeeMembership, cfg.ShopMasterWalletAddress)
 	notificationHandler := handlers.NewNotificationHandler(attendeeProfileRepo, notificationClient, cfg.AdminRoles)
 	activityHandler := handlers.NewActivityHandler(activityRepo)
 	shopHandler := handlers.NewShopHandler(shopService)
@@ -270,7 +276,7 @@ func main() {
 	// new route is an UPDATE, not a release. A route absent from that mapping
 	// passes straight through. Ordered after Auth so an unauthenticated caller
 	// cannot probe which features exist.
-	api.Use(middleware.FeatureGate(featureResolver))
+	api.Use(middleware.FeatureGate(featureResolver, attendeeMembership))
 	{
 		// Reverse proxy for Registrant backend
 		api.Any("/registrant/*path", handlers.RegistrantProxyHandler(cfg.RegistrantService))
