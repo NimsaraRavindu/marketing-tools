@@ -40,33 +40,6 @@ func (s stubGate) Gate(_ context.Context, method, routePattern string) (features
 
 func (s stubGate) BypassesGates(context.Context, string) bool { return false }
 
-// stubMembers answers from a fixed list of registered addresses, case-folded
-// the way features.Membership folds them. fail stands for a lookup the
-// database could not answer, which features.Membership resolves as true.
-type stubMembers struct {
-	registered []string
-	// all stands in for "every caller has a row", which is what most cases
-	// in this file want so they can be about something else.
-	all  bool
-	fail bool
-}
-
-func (m stubMembers) IsAttendee(_ context.Context, email string) bool {
-	if m.fail || m.all {
-		return true
-	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return false
-	}
-	for _, r := range m.registered {
-		if strings.ToLower(r) == email {
-			return true
-		}
-	}
-	return false
-}
-
 // bypassGate is a stubGate whose allowlist holds exactly the addresses in
 // allow, compared the way the real resolver compares them: case-folded, and
 // never matching the empty string.
@@ -99,18 +72,11 @@ func getAs(r *gin.Engine, path, email string) *httptest.ResponseRecorder {
 	return w
 }
 
-// newFeatureTestRouter builds the router with everybody registered, so that a
-// case about the flags or the allowlist is not also a case about the attendees
-// table. TestFeatureGate_RegistrationRequired covers the other half.
 func newFeatureTestRouter(t *testing.T, gate FeatureGateResolver) *gin.Engine {
-	return newFeatureTestRouterWith(t, gate, stubMembers{all: true})
-}
-
-func newFeatureTestRouterWith(t *testing.T, gate FeatureGateResolver, members AttendeeMembership) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(FeatureGate(gate, members))
+	r.Use(FeatureGate(gate))
 	handler := func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) }
 	r.GET("/speakers", handler)
 	r.GET("/speakers/:id", handler)
@@ -213,7 +179,7 @@ func TestFeatureGate_RefusalIsNotGivenAnETag(t *testing.T) {
 	r.Use(ETag("private, max-age=60, must-revalidate"))
 	r.Use(FeatureGate(stubGate{
 		"GET /speakers": {Feature: features.Speakers, Enabled: false, Message: "later"},
-	}, stubMembers{all: true}))
+	}))
 	r.GET("/speakers", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 
 	w := get(r, "/speakers")
@@ -296,87 +262,5 @@ func TestFeatureGate_AllowlistDoesNotChangeAnOpenRoute(t *testing.T) {
 	}
 	if w := getAs(r, "/events/current", "tester@wso2.com"); w.Code != http.StatusOK {
 		t.Errorf("ungated route status = %d, want %d", w.Code, http.StatusOK)
-	}
-}
-
-// An enabled feature is refused to a caller the attendees table does not hold
-// -- who gets exactly what they would get if the feature were switched off,
-// because from where they stand it is.
-func TestFeatureGate_RegistrationRequired(t *testing.T) {
-	enabled := stubGate{
-		"GET /speakers": {
-			Feature: features.Speakers,
-			Enabled: true,
-			Title:   "Speakers coming soon",
-			Message: "The speaker line-up is still being confirmed.",
-		},
-	}
-	disabled := stubGate{
-		"GET /speakers": {Feature: features.Speakers, Enabled: false, Title: "t", Message: "m"},
-	}
-
-	tests := []struct {
-		name  string
-		gate  FeatureGateResolver
-		email string
-		want  int
-	}{
-		{name: "registered attendee", gate: enabled, email: "attendee@wso2.com", want: http.StatusOK},
-		{name: "unregistered caller", gate: enabled, email: "stranger@example.com", want: http.StatusServiceUnavailable},
-		{name: "case-folded match", gate: enabled, email: "Attendee@WSO2.com", want: http.StatusOK},
-		{name: "no email claim", gate: enabled, email: "", want: http.StatusServiceUnavailable},
-
-		// The allowlist beats it: a tester who is not also a registered
-		// attendee is the ordinary case, not an edge one.
-		{
-			name:  "allowlisted but unregistered",
-			gate:  bypassGate{stubGate: enabled, allow: []string{"tester@wso2.com"}},
-			email: "tester@wso2.com",
-			want:  http.StatusOK,
-		},
-		// Registration narrows an enabled flag; it never turns one on.
-		{name: "registered but feature off", gate: disabled, email: "attendee@wso2.com", want: http.StatusServiceUnavailable},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := newFeatureTestRouterWith(t, tt.gate, stubMembers{registered: []string{"attendee@wso2.com"}})
-
-			w := getAs(r, "/speakers", tt.email)
-
-			if w.Code != tt.want {
-				t.Fatalf("status = %d, want %d, body: %s", w.Code, tt.want, w.Body.String())
-			}
-		})
-	}
-}
-
-// A route nobody gated is untouched. /events/current and the attendee routes
-// are how the shell learns who is holding the phone; gating them would turn a
-// hidden screen into a broken app for anybody the sync has not reached yet.
-func TestFeatureGate_RegistrationDoesNotTouchUngatedRoutes(t *testing.T) {
-	r := newFeatureTestRouterWith(t,
-		stubGate{"GET /speakers": {Feature: features.Speakers, Enabled: true}},
-		stubMembers{})
-
-	w := getAs(r, "/events/current", "stranger@example.com")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-}
-
-// A membership lookup the database could not answer must not black out the
-// app. features.Membership resolves a failure as true and this is the gate
-// honouring that.
-func TestFeatureGate_RegistrationLookupFailureServes(t *testing.T) {
-	r := newFeatureTestRouterWith(t,
-		stubGate{"GET /speakers": {Feature: features.Speakers, Enabled: true}},
-		stubMembers{fail: true})
-
-	w := getAs(r, "/speakers", "stranger@example.com")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 }
