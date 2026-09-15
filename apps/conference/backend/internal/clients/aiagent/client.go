@@ -83,12 +83,49 @@ const (
 // gateway 401 spent a day looking like an unexplained 500.
 type StatusError struct {
 	StatusCode int
-	URL        string
-	Body       string
+	// Method is the HTTP verb of the failed request. The admin routes call the
+	// AI service with GET/PATCH/DELETE as well as POST, so a hardcoded verb in
+	// Error() would misname which operation failed. Empty falls back to POST,
+	// which is what every construction site outside doAdminJSON sends.
+	Method string
+	// URL is the request URL with every query value redacted -- see
+	// redactedURL. Never assign a raw req.URL.String() here: this value is
+	// logged and rendered into Error(), and the admin routes carry an
+	// attendee's email in the query string.
+	URL  string
+	Body string
 }
 
 func (e *StatusError) Error() string {
-	return fmt.Sprintf("POST %s returned status %d: %s", e.URL, e.StatusCode, e.Body)
+	method := e.Method
+	if method == "" {
+		method = http.MethodPost
+	}
+	return fmt.Sprintf("%s %s returned status %d: %s", method, e.URL, e.StatusCode, e.Body)
+}
+
+// redactedURL renders u for logs and error messages with every query value
+// replaced by a placeholder, keeping the keys.
+//
+// The admin AI routes pass the attendee's or engineer's email as ?email=, and a
+// StatusError's URL reaches both the log store and the error message. Any admin
+// could otherwise force a 404 and persist an email in logs that RBAC no longer
+// protects. Keeping the keys preserves the only debugging signal the query
+// carried -- which parameter was sent -- without the value itself.
+func redactedURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	if u.RawQuery == "" {
+		return u.String()
+	}
+	sanitized := *u
+	q := u.Query()
+	for k := range q {
+		q.Set(k, "REDACTED")
+	}
+	sanitized.RawQuery = q.Encode()
+	return sanitized.String()
 }
 
 // StatusCodeFrom reports the upstream HTTP status carried by err, and whether
@@ -121,6 +158,24 @@ func TokenFetchStatusFrom(err error) (int, bool) {
 		return 0, true
 	}
 	return 0, false
+}
+
+// redactedRequestError wraps a transport failure from http.Client.Do with a
+// request URL whose query values are redacted.
+//
+// Rebuilding the *url.Error is what makes that stick: Do returns one carrying
+// the raw URL in its own message, so redacting only the format argument would
+// leave the email visible in the wrapped error's text. The replacement keeps
+// both the *url.Error type and the inner cause, which is what handlers match on
+// to tell "couldn't reach the AI service" (a retriable 503) from a rejected
+// OAuth2 token, so the classification is unchanged.
+func redactedRequestError(req *http.Request, err error) error {
+	safeURL := redactedURL(req.URL)
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = &url.Error{Op: urlErr.Op, URL: safeURL, Err: urlErr.Err}
+	}
+	return fmt.Errorf("request to %s failed: %w", safeURL, err)
 }
 
 // Client is an HTTP client for the external AI agent service.
@@ -342,13 +397,13 @@ func (c *Client) doJSON(ctx context.Context, path, jwtAssertion string, bodyRead
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request to %s failed: %w", req.URL, err)
+		return redactedRequestError(req, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
-		return &StatusError{StatusCode: resp.StatusCode, URL: req.URL.String(), Body: string(errBody)}
+		return &StatusError{StatusCode: resp.StatusCode, Method: req.Method, URL: redactedURL(req.URL), Body: string(errBody)}
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -512,13 +567,13 @@ func (c *Client) doAdminJSON(ctx context.Context, method, path string, query url
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request to %s failed: %w", req.URL, err)
+		return redactedRequestError(req, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
-		return &StatusError{StatusCode: resp.StatusCode, URL: req.URL.String(), Body: string(errBody)}
+		return &StatusError{StatusCode: resp.StatusCode, Method: req.Method, URL: redactedURL(req.URL), Body: string(errBody)}
 	}
 
 	if out == nil {

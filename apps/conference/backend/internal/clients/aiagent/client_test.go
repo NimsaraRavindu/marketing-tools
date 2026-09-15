@@ -20,9 +20,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -764,5 +766,119 @@ func TestAdminCalls_Non2xxIsStatusError(t *testing.T) {
 				t.Errorf("status = %d, want %d", code, tc.status)
 			}
 		})
+	}
+}
+
+// TestStatusError_RedactsEmailAndNamesMethod covers the two facts a failed admin
+// call has to get right: the error must name the verb that actually failed
+// (GET/PATCH/DELETE all reach this type, not only POST), and the attendee email
+// the admin routes pass as ?email= must never survive into the error string --
+// which is both logged and the source of the logged upstreamURL attribute.
+func TestStatusError_RedactsEmailAndNamesMethod(t *testing.T) {
+	const email = "attendee@wso2.com"
+
+	tests := []struct {
+		name       string
+		wantMethod string
+		call       func(c *Client) error
+	}{
+		{
+			name:       "DELETE",
+			wantMethod: http.MethodDelete,
+			call: func(c *Client) error {
+				return c.DeleteEngineer(context.Background(), "jwt", email)
+			},
+		},
+		{
+			name:       "GET",
+			wantMethod: http.MethodGet,
+			call: func(c *Client) error {
+				_, err := c.AdminGetProfile(context.Background(), "jwt", email)
+				return err
+			},
+		},
+		{
+			name:       "PATCH",
+			wantMethod: http.MethodPatch,
+			call: func(c *Client) error {
+				_, err := c.AdminUpdateProfile(context.Background(), "jwt", email, models.AdminProfileUpdateRequest{})
+				return err
+			},
+		},
+		{
+			name:       "POST",
+			wantMethod: http.MethodPost,
+			call: func(c *Client) error {
+				_, err := c.CreateEngineer(context.Background(), "jwt", models.EngineerCreateRequest{})
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"detail":"not found"}`))
+			}))
+			defer server.Close()
+
+			client := NewClientWithHTTPClient(config.AIAgentConfig{ServiceURL: server.URL}, server.Client())
+			err := tc.call(client)
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+
+			var statusErr *StatusError
+			if !errors.As(err, &statusErr) {
+				t.Fatalf("error is not a *StatusError: %v", err)
+			}
+			if statusErr.Method != tc.wantMethod {
+				t.Errorf("Method = %q, want %q", statusErr.Method, tc.wantMethod)
+			}
+			if got := statusErr.Error(); !strings.HasPrefix(got, tc.wantMethod+" ") {
+				t.Errorf("Error() = %q, want it to start with %q", got, tc.wantMethod)
+			}
+			if strings.Contains(statusErr.URL, email) || strings.Contains(statusErr.URL, url.QueryEscape(email)) {
+				t.Errorf("URL = %q, want the email redacted", statusErr.URL)
+			}
+			if strings.Contains(err.Error(), email) || strings.Contains(err.Error(), url.QueryEscape(email)) {
+				t.Errorf("Error() = %q, want the email redacted", err.Error())
+			}
+			// The key survives so a debugger can still see which parameter was sent.
+			if tc.wantMethod != http.MethodPost && !strings.Contains(statusErr.URL, "email=REDACTED") {
+				t.Errorf("URL = %q, want it to keep the email key", statusErr.URL)
+			}
+		})
+	}
+}
+
+// TestStatusError_EmptyMethodReadsAsPOST keeps the zero value honest for the
+// construction sites outside this package (the profile proxy handler) that carry
+// no method: those are all POSTs, and the message must not lose its verb.
+func TestStatusError_EmptyMethodReadsAsPOST(t *testing.T) {
+	err := &StatusError{StatusCode: http.StatusUnauthorized, URL: "https://ai.example.com/profile", Body: "nope"}
+	if got := err.Error(); !strings.HasPrefix(got, "POST ") {
+		t.Errorf("Error() = %q, want it to start with \"POST \"", got)
+	}
+}
+
+// TestStatusError_TransportFailureRedactsEmail covers the other path that renders
+// a request URL: a connection failure never builds a StatusError, so its message
+// is formatted separately and leaked the email on its own.
+func TestStatusError_TransportFailureRedactsEmail(t *testing.T) {
+	const email = "attendee@wso2.com"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	serverURL := server.URL
+	server.Close() // nothing is listening; the request fails in transport
+
+	client := NewClientWithHTTPClient(config.AIAgentConfig{ServiceURL: serverURL}, http.DefaultClient)
+	err := client.DeleteEngineer(context.Background(), "jwt", email)
+	if err == nil {
+		t.Fatalf("expected a transport error, got nil")
+	}
+	if strings.Contains(err.Error(), email) || strings.Contains(err.Error(), url.QueryEscape(email)) {
+		t.Errorf("Error() = %q, want the email redacted", err.Error())
 	}
 }
