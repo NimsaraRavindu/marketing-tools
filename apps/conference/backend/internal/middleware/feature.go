@@ -40,13 +40,6 @@ type FeatureGateResolver interface {
 	BypassesGates(ctx context.Context, email string) bool
 }
 
-// AttendeeMembership is the slice of *features.Membership this middleware
-// needs: whether the caller is a registered attendee, answered from a cache so
-// that asking it per request is not a query per request.
-type AttendeeMembership interface {
-	IsAttendee(ctx context.Context, email string) bool
-}
-
 // FeatureGate refuses a request whose feature is switched off in app_config.
 //
 // The microapp already hides a disabled screen, so this is the second half of
@@ -73,15 +66,6 @@ type AttendeeMembership interface {
 // screen. The exemption is per caller, so refusing everybody else is
 // unaffected, and the row is empty until an operator fills it.
 //
-// An enabled feature is not served to everyone holding a token, either. It is
-// served to a caller with a row in attendees; anybody else gets what they
-// would get if the feature were switched off, because from where they stand it
-// is. AUTH_AUDIENCES names Asgardeo applications rather than a guest list, so
-// "verified" and "invited" are different populations and only the attendees
-// table knows which is which. See features.Grant.Allowed for the whole rule,
-// which handlers.AppConfigHandler evaluates identically so that a hidden
-// screen and a closed route are always the same decision.
-//
 // The response is 503, matching the shop's master-wallet gate
 // (internal/handlers/shop.go) and for the same reason: nothing about the
 // request is wrong, the caller cannot fix it, and it will start working again
@@ -91,7 +75,7 @@ type AttendeeMembership interface {
 // on its placeholder screen, so a client with no flags of its own still gets a
 // usable message instead of a bare status. `message` (not `error`) is the
 // handler-side convention in this codebase.
-func FeatureGate(resolver FeatureGateResolver, members AttendeeMembership) gin.HandlerFunc {
+func FeatureGate(resolver FeatureGateResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// FullPath is the matched route pattern ("/speakers/:id"), which is
 		// what the mapping is written against. It is empty for an unmatched
@@ -105,60 +89,31 @@ func FeatureGate(resolver FeatureGateResolver, members AttendeeMembership) gin.H
 		ctx := c.Request.Context()
 
 		state, gated := resolver.Gate(ctx, c.Request.Method, routePattern)
-		if !gated {
+		if !gated || state.Enabled {
 			c.Next()
 			return
 		}
 
+		// The allowlist is checked only once the gate has already decided to
+		// refuse, so an ordinary request never pays for it and the log line
+		// below is emitted only for a route that was genuinely closed.
+		//
 		// UserInfoFromContext is populated because this middleware is
 		// registered after Auth on the same group (cmd/server/main.go); a nil
 		// here means someone reordered them, and it denies rather than
 		// letting an unidentified caller through.
-		var email string
-		if user := UserInfoFromContext(ctx); user != nil {
-			email = user.Email
-		}
-
-		// The allowlist is a set in the snapshot already in hand, so it is
-		// free; membership may cost a query on a cache miss. Hence this
-		// order, and hence asking about the attendees table only when it can
-		// still change the answer -- never for a caller the allowlist has
-		// already settled, and never behind a switched-off feature, which is
-		// refused whatever that table says.
-		grant := features.Grant{
-			Enabled:  state.Enabled,
-			Bypasses: email != "" && resolver.BypassesGates(ctx, email),
-		}
-		if !grant.Bypasses && grant.Enabled {
-			grant.Registered = members.IsAttendee(ctx, email)
-		}
-
-		if grant.Allowed() {
-			if grant.Bypasses && !state.Enabled {
-				// Warn, not Info: a route the operator switched off is
-				// answering, which is correct here but is also the shape of a
-				// misconfigured allowlist, so it should be visible without
-				// turning up the level.
-				slog.WarnContext(ctx, "serving a disabled feature to an allowlisted caller",
-					"feature", string(state.Feature), "method", c.Request.Method, "route", routePattern)
-			}
+		if user := UserInfoFromContext(ctx); user != nil && resolver.BypassesGates(ctx, user.Email) {
+			// Warn, not Info: a route the operator switched off is answering,
+			// which is correct here but is also the shape of a misconfigured
+			// allowlist, so it should be visible without turning up the level.
+			slog.WarnContext(ctx, "serving a disabled feature to an allowlisted caller",
+				"feature", string(state.Feature), "method", c.Request.Method, "route", routePattern)
 			c.Next()
 			return
 		}
 
-		// Two different refusals, logged apart because they call for different
-		// responses from whoever is reading: a flag that is off is the
-		// operator's own doing, while an unregistered caller on a feature that
-		// is on is somebody the marketing team's attendee sync has not written
-		// a row for -- one person who slipped through it, or the sync itself
-		// not having run.
-		if state.Enabled {
-			slog.InfoContext(ctx, "refusing request from an unregistered caller",
-				"feature", string(state.Feature), "method", c.Request.Method, "route", routePattern)
-		} else {
-			slog.InfoContext(ctx, "refusing request for a disabled feature",
-				"feature", string(state.Feature), "method", c.Request.Method, "route", routePattern)
-		}
+		slog.InfoContext(ctx, "refusing request for a disabled feature",
+			"feature", string(state.Feature), "method", c.Request.Method, "route", routePattern)
 
 		// ETag() buffers the handler's body and only stamps a validator on
 		// a 200, so this abort is never cached by a client.

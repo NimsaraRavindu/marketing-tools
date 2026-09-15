@@ -80,7 +80,7 @@ func TestAppConfigHandler_List_Success(t *testing.T) {
 	reader := &fakeAppConfigReader{configs: []models.AppConfig{
 		{Key: "ATTENDEES_SYNC", Value: "COMPLETED", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
 	}}
-	h := NewAppConfigHandler(reader, nil, nil, "")
+	h := NewAppConfigHandler(reader, nil, "")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -98,7 +98,7 @@ func TestAppConfigHandler_List_Success(t *testing.T) {
 // *empty* array -- the presentational defaults are always emitted -- but a
 // `null` body is what the microapp cannot survive, so that is what this pins.
 func TestAppConfigHandler_List_EmptyReturnsArrayNotNull(t *testing.T) {
-	h := NewAppConfigHandler(&fakeAppConfigReader{configs: nil}, nil, nil, "")
+	h := NewAppConfigHandler(&fakeAppConfigReader{configs: nil}, nil, "")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -116,7 +116,7 @@ func TestAppConfigHandler_List_EmptyReturnsArrayNotNull(t *testing.T) {
 }
 
 func TestAppConfigHandler_List_RepoErrorMapsTo500(t *testing.T) {
-	h := NewAppConfigHandler(&fakeAppConfigReader{err: errBoom}, nil, nil, "")
+	h := NewAppConfigHandler(&fakeAppConfigReader{err: errBoom}, nil, "")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -142,16 +142,6 @@ func (f *fakeFeatureSnapshotter) BypassesGates(_ context.Context, email string) 
 	return f.bypass[strings.ToLower(email)]
 }
 
-// fakeMembers answers from a fixed set of registered addresses, case-folded
-// the way features.Membership folds them. Most cases in this file pass nil
-// instead, which the handler reads as "cannot tell", so that a case about the
-// flags is not also a case about the attendees table.
-type fakeMembers map[string]bool
-
-func (m fakeMembers) IsAttendee(_ context.Context, email string) bool {
-	return m[strings.ToLower(strings.TrimSpace(email))]
-}
-
 // The microapp must be able to read a feature's state even when nobody has
 // seeded a row for it, so the handler fills the gaps from the resolver.
 func TestAppConfigHandler_List_SynthesisesMissingFeatureRows(t *testing.T) {
@@ -161,7 +151,7 @@ func TestAppConfigHandler_List_SynthesisesMissingFeatureRows(t *testing.T) {
 	feats := &fakeFeatureSnapshotter{states: map[features.Feature]features.State{
 		features.AIChat: {Feature: features.AIChat, Enabled: false, Title: "Later", Message: "Much later"},
 	}}
-	h := NewAppConfigHandler(reader, feats, nil, "")
+	h := NewAppConfigHandler(reader, feats, "")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -194,7 +184,7 @@ func TestAppConfigHandler_List_StoredRowBeatsTheDefault(t *testing.T) {
 	feats := &fakeFeatureSnapshotter{states: map[features.Feature]features.State{
 		features.AIChat: {Feature: features.AIChat, Enabled: false, Title: "Later", Message: "Much later"},
 	}}
-	h := NewAppConfigHandler(reader, feats, nil, "")
+	h := NewAppConfigHandler(reader, feats, "")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -229,7 +219,7 @@ func TestAppConfigHandler_List_IsSortedByKey(t *testing.T) {
 		features.Coin:    {Feature: features.Coin, Enabled: true, Title: "a", Message: "b"},
 		features.Profile: {Feature: features.Profile, Enabled: true, Title: "a", Message: "b"},
 	}}
-	h := NewAppConfigHandler(&fakeAppConfigReader{}, feats, nil, "")
+	h := NewAppConfigHandler(&fakeAppConfigReader{}, feats, "")
 	r := newAppConfigTestRouter(h)
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -285,7 +275,7 @@ func TestAppConfigHandler_List_ShopHiddenDefaultsToVisible(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewAppConfigHandler(&fakeAppConfigReader{configs: tt.rows}, tt.feats, nil, "")
+			h := NewAppConfigHandler(&fakeAppConfigReader{configs: tt.rows}, tt.feats, "")
 			r := newAppConfigTestRouter(h)
 
 			w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -339,7 +329,7 @@ func TestAppConfigHandler_List_RedactsTheGateBypassAllowlist(t *testing.T) {
 		{Key: features.GateBypassEmailsKey, Value: "tester@wso2.com, other@wso2.com"},
 		{Key: "is_shop_enabled", Value: "0"},
 	}}
-	r := newAppConfigTestRouter(NewAppConfigHandler(reader, nil, nil, ""))
+	r := newAppConfigTestRouter(NewAppConfigHandler(reader, nil, ""))
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
 
@@ -405,7 +395,7 @@ func TestAppConfigHandler_List_BypassReportsDisabledFeaturesAsEnabled(t *testing
 		},
 		bypass: map[string]bool{"tester@wso2.com": true},
 	}
-	h := NewAppConfigHandler(reader, feats, nil, "")
+	h := NewAppConfigHandler(reader, feats, "")
 	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "tester@wso2.com"})
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -434,9 +424,8 @@ func TestAppConfigHandler_List_BypassReportsDisabledFeaturesAsEnabled(t *testing
 	}
 }
 
-// The flags an ordinary registered attendee sees must not move because
-// somebody else is on the list. This is the assertion that says the bypass
-// stayed per caller.
+// The flags an ordinary attendee sees must not move because somebody else is
+// on the list. This is the assertion that says the bypass stayed per caller.
 func TestAppConfigHandler_List_BypassLeavesEveryoneElseAlone(t *testing.T) {
 	rows := []models.AppConfig{
 		{Key: features.Shop.EnabledKey(), Value: "0", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
@@ -463,7 +452,7 @@ func TestAppConfigHandler_List_BypassLeavesEveryoneElseAlone(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewAppConfigHandler(&fakeAppConfigReader{configs: rows}, feats(), nil, "")
+			h := NewAppConfigHandler(&fakeAppConfigReader{configs: rows}, feats(), "")
 			r := newAppConfigTestRouterAs(h, tt.user)
 
 			w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -489,7 +478,7 @@ func TestAppConfigHandler_List_BypassMatchesEmailCaseInsensitively(t *testing.T)
 		},
 		bypass: map[string]bool{"tester@wso2.com": true},
 	}
-	h := NewAppConfigHandler(&fakeAppConfigReader{}, feats, nil, "")
+	h := NewAppConfigHandler(&fakeAppConfigReader{}, feats, "")
 	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "Tester@WSO2.com"})
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -512,7 +501,7 @@ func TestAppConfigHandler_List_BypassLeavesPresentationalKeysAlone(t *testing.T)
 		},
 		bypass: map[string]bool{"tester@wso2.com": true},
 	}
-	h := NewAppConfigHandler(reader, feats, nil, "")
+	h := NewAppConfigHandler(reader, feats, "")
 	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "tester@wso2.com"})
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -535,7 +524,7 @@ func TestAppConfigHandler_List_BypassDoesNotUnredactTheAllowlist(t *testing.T) {
 		},
 		bypass: map[string]bool{"tester@wso2.com": true},
 	}
-	h := NewAppConfigHandler(reader, feats, nil, "")
+	h := NewAppConfigHandler(reader, feats, "")
 	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "tester@wso2.com"})
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -551,7 +540,7 @@ func TestAppConfigHandler_List_BypassNoopsWithoutAResolver(t *testing.T) {
 	reader := &fakeAppConfigReader{configs: []models.AppConfig{
 		{Key: features.Shop.EnabledKey(), Value: "0", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
 	}}
-	h := NewAppConfigHandler(reader, nil, nil, "")
+	h := NewAppConfigHandler(reader, nil, "")
 	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "tester@wso2.com"})
 
 	w := doRequest(r, http.MethodGet, "/app-configs", nil)
@@ -562,143 +551,6 @@ func TestAppConfigHandler_List_BypassNoopsWithoutAResolver(t *testing.T) {
 	got := decodeAppConfigs(t, w.Body.Bytes())
 	if got[features.Shop.EnabledKey()] != "0" {
 		t.Errorf("%s = %q, want \"0\"", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
-	}
-}
-
-// An enabled feature is reported off to a caller the attendees table does not
-// hold, so the microapp hides the screen whose routes middleware.FeatureGate
-// is refusing for the same reason.
-func TestAppConfigHandler_List_UnregisteredCallerSeesEnabledFeaturesAsOff(t *testing.T) {
-	reader := &fakeAppConfigReader{configs: []models.AppConfig{
-		{Key: features.Shop.EnabledKey(), Value: "1", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
-		{Key: "cache_version", Value: "7", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
-	}}
-	feats := &fakeFeatureSnapshotter{
-		states: map[features.Feature]features.State{features.Shop: {Feature: features.Shop, Enabled: true}},
-	}
-	h := NewAppConfigHandler(reader, feats, fakeMembers{}, "")
-	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "stranger@example.com"})
-
-	w := doRequest(r, http.MethodGet, "/app-configs", nil)
-
-	got := decodeAppConfigs(t, w.Body.Bytes())
-	if got[features.Shop.EnabledKey()] != "0" {
-		t.Errorf("%s = %q, want \"0\"", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
-	}
-	// Only the flags move. An unregistered caller still needs the rest of the
-	// config to render the screen that asks them to register.
-	if got["cache_version"] != "7" {
-		t.Errorf("cache_version = %q, want \"7\"", got["cache_version"])
-	}
-}
-
-// The whole truth table the rule implements, in one place, so that a change to
-// features.Grant.Allowed that this endpoint disagrees with cannot pass.
-func TestAppConfigHandler_List_AccessRuleTruthTable(t *testing.T) {
-	tests := []struct {
-		name  string
-		flag  string
-		email string
-		want  string
-	}{
-		{name: "on, registered", flag: "1", email: "attendee@wso2.com", want: "1"},
-		{name: "on, unregistered", flag: "1", email: "someone@example.com", want: "0"},
-		{name: "on, allowlisted but unregistered", flag: "1", email: "tester@wso2.com", want: "1"},
-
-		// Registration narrows an enabled flag; it never turns one on.
-		{name: "off, registered", flag: "0", email: "attendee@wso2.com", want: "0"},
-		{name: "off, unregistered", flag: "0", email: "someone@example.com", want: "0"},
-		{name: "off, allowlisted", flag: "0", email: "tester@wso2.com", want: "1"},
-
-		// A token that verified but carried no email claim is neither
-		// allowlisted nor registered.
-		{name: "on, no email claim", flag: "1", email: "", want: "0"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			enabled := tt.flag == "1"
-			reader := &fakeAppConfigReader{configs: []models.AppConfig{
-				{Key: features.Shop.EnabledKey(), Value: tt.flag, CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
-			}}
-			feats := &fakeFeatureSnapshotter{
-				states: map[features.Feature]features.State{features.Shop: {Feature: features.Shop, Enabled: enabled}},
-				bypass: map[string]bool{"tester@wso2.com": true},
-			}
-			h := NewAppConfigHandler(reader, feats, fakeMembers{"attendee@wso2.com": true}, "")
-			r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: tt.email})
-
-			w := doRequest(r, http.MethodGet, "/app-configs", nil)
-
-			got := decodeAppConfigs(t, w.Body.Bytes())
-			if got[features.Shop.EnabledKey()] != tt.want {
-				t.Errorf("%s = %q, want %q", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()], tt.want)
-			}
-		})
-	}
-}
-
-// A row the rule leaves standing is passed through exactly as stored. The
-// microapp has always coerced these values itself, and rewriting a row nobody
-// asked about would make the response depend on how an operator typed it.
-func TestAppConfigHandler_List_UnchangedFlagKeepsItsStoredSpelling(t *testing.T) {
-	reader := &fakeAppConfigReader{configs: []models.AppConfig{
-		{Key: features.Shop.EnabledKey(), Value: "true", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
-	}}
-	feats := &fakeFeatureSnapshotter{
-		states: map[features.Feature]features.State{features.Shop: {Feature: features.Shop, Enabled: true}},
-	}
-	h := NewAppConfigHandler(reader, feats, nil, "")
-	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "someone@example.com"})
-
-	w := doRequest(r, http.MethodGet, "/app-configs", nil)
-
-	got := decodeAppConfigs(t, w.Body.Bytes())
-	if got[features.Shop.EnabledKey()] != "true" {
-		t.Errorf("%s = %q, want it passed through as stored", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
-	}
-}
-
-// The rows come from the table; the snapshot is up to DefaultTTL behind them.
-// An operator who has just switched a feature on must not watch this endpoint
-// report it off for the next half minute.
-func TestAppConfigHandler_List_StoredRowBeatsAStaleSnapshot(t *testing.T) {
-	reader := &fakeAppConfigReader{configs: []models.AppConfig{
-		{Key: features.Shop.EnabledKey(), Value: "1", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
-	}}
-	feats := &fakeFeatureSnapshotter{
-		// Stale: the row says on, the cached snapshot has not caught up.
-		states: map[features.Feature]features.State{features.Shop: {Feature: features.Shop, Enabled: false}},
-	}
-	h := NewAppConfigHandler(reader, feats, nil, "")
-	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "someone@example.com"})
-
-	w := doRequest(r, http.MethodGet, "/app-configs", nil)
-
-	got := decodeAppConfigs(t, w.Body.Bytes())
-	if got[features.Shop.EnabledKey()] != "1" {
-		t.Errorf("%s = %q, want the fresher stored row to win", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
-	}
-}
-
-// A nil membership checker cannot tell who is registered. It grants rather than
-// refuses, the direction features.Membership takes when the lookup fails and
-// for the same reason: a service that cannot answer must not black out the app.
-func TestAppConfigHandler_List_NilMembershipGrantsRatherThanRefuses(t *testing.T) {
-	reader := &fakeAppConfigReader{configs: []models.AppConfig{
-		{Key: features.Shop.EnabledKey(), Value: "1", CreatedBy: "SYSTEM", UpdatedBy: "SYSTEM"},
-	}}
-	feats := &fakeFeatureSnapshotter{
-		states: map[features.Feature]features.State{features.Shop: {Feature: features.Shop, Enabled: true}},
-	}
-	h := NewAppConfigHandler(reader, feats, nil, "")
-	r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "someone@example.com"})
-
-	w := doRequest(r, http.MethodGet, "/app-configs", nil)
-
-	got := decodeAppConfigs(t, w.Body.Bytes())
-	if got[features.Shop.EnabledKey()] != "1" {
-		t.Errorf("%s = %q, want \"1\"", features.Shop.EnabledKey(), got[features.Shop.EnabledKey()])
 	}
 }
 
@@ -732,7 +584,7 @@ func TestAppConfigHandler_List_IsNeverCached(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewAppConfigHandler(tt.reader, feats, nil, "")
+			h := NewAppConfigHandler(tt.reader, feats, "")
 			r := newAppConfigTestRouterAs(h, &middleware.UserInfo{Email: "someone@example.com"})
 
 			w := doRequest(r, http.MethodGet, "/app-configs", nil)

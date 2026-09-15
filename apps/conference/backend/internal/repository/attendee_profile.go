@@ -144,31 +144,6 @@ func (r *AttendeeProfileRepo) GetByEmail(ctx context.Context, email string) (mod
 	return r.get(ctx, "email = $1", email)
 }
 
-// Exists reports whether the attendees table holds this address. It decrypts
-// nothing and selects no column, because the caller -- features.Membership,
-// deciding whether a registered attendee is asking -- needs the answer and
-// none of the PII behind it.
-//
-// Matched on lower(email) rather than on the address as given: the claim comes
-// from the IdP and the row comes from registration, and nothing guarantees the
-// two chose the same case. That does not use the UNIQUE btree on email, so on
-// a large attendees table this is a sequential scan -- which is why
-// features.Membership caches the answer rather than calling it per request.
-// Adding a functional index here would be DDL on a table this service shares
-// with the upstream marketing tooling, so it is deliberately not done from a
-// migration of ours.
-func (r *AttendeeProfileRepo) Exists(ctx context.Context, email string) (bool, error) {
-	var exists bool
-	err := r.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM attendees WHERE lower(email) = lower($1))`,
-		email,
-	).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
-}
-
 // GetByUUID returns a single attendee by idp_uuid. Returns ErrNotFound if no
 // row exists. Used internally to enrich connection responses.
 func (r *AttendeeProfileRepo) GetByUUID(ctx context.Context, idpUUID string) (models.Attendee, error) {

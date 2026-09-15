@@ -976,28 +976,6 @@ paths:
         presentational, gates no route, and is left alone. Nothing else in the
         response varies by caller, and being on the allowlist never reveals
         who else is: the row itself stays dropped.
-        The response narrows in the other direction for a caller with no row in
-        the attendees table: every `is_<feature>_enabled` key reports `"0"` to
-        them, and the routes behind it answer 503, which is what they would get
-        if the feature were switched off -- from where they stand it is.
-        AUTH_AUDIENCES names Asgardeo applications rather than a guest list, so
-        a token this service will verify and an invitation to the conference are
-        different things, and the attendees table (populated by the marketing
-        team's sync, not by anything in this service) is the only thing that
-        knows which is which. The full rule, evaluated identically here and by
-        the feature gate, so that a hidden screen and a closed route are always
-        the same decision:
-          bypass OR ( is_<feature>_enabled AND registered )
-        Registration only ever narrows an enabled flag; it never turns one on,
-        and the allowlist beats both. The routes the shell needs before it knows
-        who is holding the phone are deliberately outside all of this --
-        `/attendees`, `/attendees/me`, `/user-profile`, `/events/current` and
-        this endpoint are absent from the `feature_gates` mapping, so a caller
-        the sync has not reached still gets a working app shell rather than a
-        blank one.
-        A row this rule leaves standing is returned byte for byte as stored, so
-        a value spelled `true` or `on` still arrives spelled that way; only a
-        row the rule overturns is rewritten, and then to `"1"` or `"0"`.
         Consequence for caching: this response is never stored. It answers
         `Cache-Control: no-store` and carries no `ETag`, unlike the routes
         marked cacheable elsewhere in this file -- keying a shared cache on the
