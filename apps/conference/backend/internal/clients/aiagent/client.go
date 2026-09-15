@@ -51,6 +51,26 @@ import (
 // error message, so a huge/unexpected body doesn't blow up logs.
 const maxErrBodyBytes = 2048
 
+// maxDrainBytes caps how much of a response body is read purely to finish it.
+// net/http returns a connection to the keep-alive pool only once its body has
+// been read to EOF, and every path here stops early -- the error path at
+// maxErrBodyBytes, the success path wherever the first JSON value ends -- so
+// without this the connection is dropped instead of reused. That matters
+// because these calls go through a managed gateway that meters connections.
+//
+// It is bounded rather than an open io.Copy so a runaway or hostile upstream
+// cannot make this backend read for as long as it cares to send: 64 KiB is far
+// beyond anything con-ai answers with, and a body past it simply is not worth
+// reading, so we stop and let Close drop that one connection exactly as it did
+// before.
+const maxDrainBytes = 64 * 1024
+
+// drainBody consumes what is left of body so its connection can be reused.
+// Bounded on purpose -- see maxDrainBytes.
+func drainBody(body io.Reader) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxDrainBytes))
+}
+
 const (
 	// tokenFetchTimeout bounds the OAuth2 token fetch, deliberately separate
 	// from cfg.RequestTimeout. The two measure different things: an AI answer
@@ -403,12 +423,18 @@ func (c *Client) doJSON(ctx context.Context, path, jwtAssertion string, bodyRead
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
+		// Only the first maxErrBodyBytes reach the message; drain the rest so
+		// the connection survives the failure.
+		drainBody(resp.Body)
 		return &StatusError{StatusCode: resp.StatusCode, Method: req.Method, URL: redactedURL(req.URL), Body: string(errBody)}
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("decoding response body: %w", err)
 	}
+	// Decode stops at the end of the first JSON value, so anything after it --
+	// trailing whitespace, chunked framing -- is still unread.
+	drainBody(resp.Body)
 	return nil
 }
 
@@ -573,19 +599,25 @@ func (c *Client) doAdminJSON(ctx context.Context, method, path string, query url
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
+		// Only the first maxErrBodyBytes reach the message; drain the rest so
+		// the connection survives the failure.
+		drainBody(resp.Body)
 		return &StatusError{StatusCode: resp.StatusCode, Method: req.Method, URL: redactedURL(req.URL), Body: string(errBody)}
 	}
 
 	if out == nil {
 		// A body-less success (204). Drain so the connection can be reused, but
 		// decode nothing.
-		_, _ = io.Copy(io.Discard, resp.Body)
+		drainBody(resp.Body)
 		return nil
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("decoding response body: %w", err)
 	}
+	// Decode stops at the end of the first JSON value, so anything after it --
+	// trailing whitespace, chunked framing -- is still unread.
+	drainBody(resp.Body)
 	return nil
 }
 

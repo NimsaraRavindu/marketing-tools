@@ -700,13 +700,28 @@ func TestAdminCalls_WireContract(t *testing.T) {
 
 // TestAdminCalls_Non2xxIsStatusError proves every admin call surfaces a non-2xx
 // as a *StatusError carrying the code, which is what lets the handler tell a
-// con-ai 400/404 (relay) from a gateway 401/403 (credential fault).
+// con-ai 400/404 (relay) from a gateway 401/403 (credential fault). All nine are
+// here on purpose: four of the handlers pass an empty notFoundMessage and rely
+// entirely on this type reaching them intact, so a method missing from this
+// table is a method whose 404 wording nothing checks.
 func TestAdminCalls_Non2xxIsStatusError(t *testing.T) {
+	const email = "nope@wso2.com"
+
 	tests := []struct {
-		name   string
+		name string
+		// status and body are what the fake con-ai answers with.
 		status int
 		body   string
 		call   func(c *Client) error
+		// wantMethod is the verb the StatusError must name; Error() would
+		// otherwise misreport every non-POST admin call as a POST.
+		wantMethod string
+		// wantWrap is the per-call prefix the client adds, which is how a log
+		// line says which admin operation failed.
+		wantWrap string
+		// wantEmailKey marks the calls that key on ?email=, whose URL must keep
+		// the key and lose the value.
+		wantEmailKey bool
 	}{
 		{
 			name:   "CreateEngineer 400",
@@ -716,23 +731,26 @@ func TestAdminCalls_Non2xxIsStatusError(t *testing.T) {
 				_, err := c.CreateEngineer(context.Background(), "jwt", models.EngineerCreateRequest{})
 				return err
 			},
+			wantMethod: http.MethodPost, wantWrap: "aiagent: creating engineer: ",
 		},
 		{
 			name:   "DeleteEngineer 404",
 			status: http.StatusNotFound,
 			body:   `{"detail":"Engineer not found"}`,
 			call: func(c *Client) error {
-				return c.DeleteEngineer(context.Background(), "jwt", "nope@wso2.com")
+				return c.DeleteEngineer(context.Background(), "jwt", email)
 			},
+			wantMethod: http.MethodDelete, wantWrap: "aiagent: deleting engineer: ", wantEmailKey: true,
 		},
 		{
 			name:   "AdminGetProfile 404",
 			status: http.StatusNotFound,
 			body:   `{"detail":"Profile not found"}`,
 			call: func(c *Client) error {
-				_, err := c.AdminGetProfile(context.Background(), "jwt", "nope@wso2.com")
+				_, err := c.AdminGetProfile(context.Background(), "jwt", email)
 				return err
 			},
+			wantMethod: http.MethodGet, wantWrap: "aiagent: getting profile: ", wantEmailKey: true,
 		},
 		{
 			name:   "ListEngineers gateway 401",
@@ -742,6 +760,56 @@ func TestAdminCalls_Non2xxIsStatusError(t *testing.T) {
 				_, err := c.ListEngineers(context.Background(), "jwt")
 				return err
 			},
+			wantMethod: http.MethodGet, wantWrap: "aiagent: listing engineers: ",
+		},
+		{
+			name:   "EngineerExists gateway 403",
+			status: http.StatusForbidden,
+			body:   `{"code":"900908","error_message":"Resource forbidden"}`,
+			call: func(c *Client) error {
+				_, err := c.EngineerExists(context.Background(), "jwt", email)
+				return err
+			},
+			wantMethod: http.MethodGet, wantWrap: "aiagent: checking engineer exists: ", wantEmailKey: true,
+		},
+		{
+			name:   "AdminCreateProfile 400",
+			status: http.StatusBadRequest,
+			body:   `{"detail":"user.email is required"}`,
+			call: func(c *Client) error {
+				_, err := c.AdminCreateProfile(context.Background(), "jwt", models.AdminProfileCreateRequest{})
+				return err
+			},
+			wantMethod: http.MethodPost, wantWrap: "aiagent: creating profile: ",
+		},
+		{
+			name:   "AdminUpdateProfile 404",
+			status: http.StatusNotFound,
+			body:   `{"detail":"Profile not found"}`,
+			call: func(c *Client) error {
+				_, err := c.AdminUpdateProfile(context.Background(), "jwt", email, models.AdminProfileUpdateRequest{LinkedInInfo: "fresh"})
+				return err
+			},
+			wantMethod: http.MethodPatch, wantWrap: "aiagent: updating profile: ", wantEmailKey: true,
+		},
+		{
+			name:   "AdminDeleteProfile 404",
+			status: http.StatusNotFound,
+			body:   `{"detail":"Profile not found"}`,
+			call: func(c *Client) error {
+				return c.AdminDeleteProfile(context.Background(), "jwt", email)
+			},
+			wantMethod: http.MethodDelete, wantWrap: "aiagent: deleting profile: ", wantEmailKey: true,
+		},
+		{
+			name:   "ProfileExists 500",
+			status: http.StatusInternalServerError,
+			body:   `{"detail":"Internal Server Error"}`,
+			call: func(c *Client) error {
+				_, err := c.ProfileExists(context.Background(), "jwt", email)
+				return err
+			},
+			wantMethod: http.MethodGet, wantWrap: "aiagent: checking profile exists: ", wantEmailKey: true,
 		},
 	}
 
@@ -764,6 +832,25 @@ func TestAdminCalls_Non2xxIsStatusError(t *testing.T) {
 			}
 			if code != tc.status {
 				t.Errorf("status = %d, want %d", code, tc.status)
+			}
+			var statusErr *StatusError
+			if !errors.As(err, &statusErr) {
+				t.Fatalf("error is not a *StatusError: %v", err)
+			}
+			if statusErr.Method != tc.wantMethod {
+				t.Errorf("Method = %q, want %q", statusErr.Method, tc.wantMethod)
+			}
+			if statusErr.Body != tc.body {
+				t.Errorf("Body = %q, want %q", statusErr.Body, tc.body)
+			}
+			if !strings.HasPrefix(err.Error(), tc.wantWrap) {
+				t.Errorf("Error() = %q, want it to start with %q", err.Error(), tc.wantWrap)
+			}
+			if strings.Contains(err.Error(), email) || strings.Contains(err.Error(), url.QueryEscape(email)) {
+				t.Errorf("Error() = %q, want the email redacted", err.Error())
+			}
+			if tc.wantEmailKey && !strings.Contains(statusErr.URL, "email=REDACTED") {
+				t.Errorf("URL = %q, want it to keep the email key", statusErr.URL)
 			}
 		})
 	}
@@ -880,5 +967,83 @@ func TestStatusError_TransportFailureRedactsEmail(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), email) || strings.Contains(err.Error(), url.QueryEscape(email)) {
 		t.Errorf("Error() = %q, want the email redacted", err.Error())
+	}
+}
+
+// TestResponseBodiesAreDrained covers both halves of the bounded drain: neither
+// path reads the whole body on its own -- the error path stops at
+// maxErrBodyBytes, json.Decode stops at the end of the first JSON value -- and
+// net/http only returns a connection to the keep-alive pool once its body has
+// reached EOF. Reuse is observed server-side through RemoteAddr: a second
+// request arriving on the same client port is the same connection. Before the
+// drain, each of these cost a fresh connection through the metered gateway.
+//
+// The error case also pins the truncation itself: an oversized body must still
+// produce a StatusError whose Body is capped, not an error of its own.
+func TestResponseBodiesAreDrained(t *testing.T) {
+	// Comfortably past both maxErrBodyBytes and any json.Decoder read-ahead,
+	// and well under maxDrainBytes so the drain does reach EOF.
+	const overflow = 8 * 1024
+
+	tests := []struct {
+		name string
+		// status and body are what the fake con-ai answers with.
+		status int
+		body   string
+		call   func(c *Client) error
+	}{
+		{
+			name:   "non-2xx beyond the error cap",
+			status: http.StatusNotFound,
+			body:   `{"detail":"` + strings.Repeat("x", overflow) + `"}`,
+			call: func(c *Client) error {
+				_, err := c.AdminGetProfile(context.Background(), "jwt", "nope@wso2.com")
+				var statusErr *StatusError
+				if !errors.As(err, &statusErr) {
+					return err
+				}
+				if len(statusErr.Body) != maxErrBodyBytes {
+					t.Errorf("len(Body) = %d, want it truncated to %d", len(statusErr.Body), maxErrBodyBytes)
+				}
+				return nil
+			},
+		},
+		{
+			// A trailing run of whitespace stands in for anything con-ai might
+			// send after the value the decoder wanted.
+			name:   "2xx with bytes after the JSON value",
+			status: http.StatusOK,
+			body:   `{"exists":true}` + strings.Repeat(" ", overflow),
+			call: func(c *Client) error {
+				_, err := c.ProfileExists(context.Background(), "jwt", "someone@wso2.com")
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var addrs []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				addrs = append(addrs, r.RemoteAddr)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			client := NewClientWithHTTPClient(config.AIAgentConfig{ServiceURL: server.URL}, server.Client())
+			for i := 0; i < 2; i++ {
+				if err := tc.call(client); err != nil {
+					t.Fatalf("call %d returned an unexpected error: %v", i, err)
+				}
+			}
+
+			if len(addrs) != 2 {
+				t.Fatalf("server saw %d requests, want 2", len(addrs))
+			}
+			if addrs[0] != addrs[1] {
+				t.Errorf("connection was not reused: %q then %q", addrs[0], addrs[1])
+			}
+		})
 	}
 }

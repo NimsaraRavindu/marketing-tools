@@ -21,6 +21,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -63,16 +64,67 @@ func (h *AIAgentHandler) requireAIAdmin(c *gin.Context) (*middleware.UserInfo, b
 	return user, true
 }
 
-// requiredEmailQuery reads the mandatory ?email= query parameter, writing a 400
-// and returning ("", false) when it is absent. The engineer/profile routes key
-// on email, so a missing one is a client error, not an upstream call.
-func requiredEmailQuery(c *gin.Context) (string, bool) {
-	email := c.Query("email")
+// emailPathParam reads the {email} path segment the engineer/profile routes key
+// on, writing a 400 and returning ("", false) when it is absent or blank. gin
+// has already percent-decoded it, so an operator may send the address raw or
+// encoded ("a.b@wso2.com" and "a.b%40wso2.com" both arrive here identical);
+// the "@" and "." need no escaping in a path segment, but tooling that escapes
+// them anyway still routes.
+//
+// A route with a ":email" segment cannot match an empty one, so the miss below
+// is only reachable via a whitespace-only segment -- it stays because the
+// alternative is passing that upstream for con-ai to reject on our behalf.
+func emailPathParam(c *gin.Context) (string, bool) {
+	email := strings.TrimSpace(c.Param("email"))
 	if email == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "email is required"})
 		return "", false
 	}
 	return email, true
+}
+
+// The actions named in the audit trail below. They are stable tokens rather
+// than prose because they land in the log *message* as well as in an attribute,
+// and a message that is grep-able across deployments is worth more than one
+// that reads nicely once.
+const (
+	auditCreateEngineer = "create-o2bar-engineer"
+	auditDeleteEngineer = "delete-o2bar-engineer"
+	auditCreateProfile  = "create-ai-profile"
+	auditUpdateProfile  = "update-ai-profile"
+	auditDeleteProfile  = "delete-ai-profile"
+)
+
+// auditAIAdminWrite records a completed mutation of a con-ai dataset: who did
+// it, what they did, and whose record changed.
+//
+// It exists because nothing else writes the change down. con-ai authenticates
+// nobody and keeps no trail of its own, and requireAIAdmin only logs the calls
+// it *refuses* -- so before this, a successful removal of an engineer or an
+// overwrite of an attendee's researched profile left no record anywhere. Only
+// the five mutating routes call it: a read changes no state anyone later has to
+// account for, so auditing the other four would add volume, not accountability.
+//
+// The action is repeated in the message because the deployed log viewer renders
+// slog's message and drops its attributes (the same reason respondAIUpstreamError
+// folds the upstream status into its message); the attribute is what makes the
+// trail filterable once the raw JSON is in hand.
+//
+// target is the engineer's or attendee's email, logged in full. That is
+// deliberate, and it is not a hole in the redaction the aiagent client applies
+// to its error paths (redactedURL strips every query value, so no one can force
+// a 404 and park an arbitrary address in the log store). The two differ in what
+// the email is doing there. In an error string it is incidental -- present only
+// because that is how the request happened to be addressed, adding nothing to
+// the diagnosis, and accruing on failures that can be provoked against
+// addresses the caller merely guessed. In an audit record it *is* the record:
+// "an engineer was deleted" without naming which one answers none of the
+// questions this line exists to answer. So the entry is written once per
+// successful state change, by an already-authorized caller, against an address
+// that caller demonstrably already had.
+func auditAIAdminWrite(c *gin.Context, user *middleware.UserInfo, action, target string) {
+	slog.InfoContext(c.Request.Context(), "AI admin action: "+action,
+		"user", user.UserID, "action", action, "targetEmail", target)
 }
 
 // CreateEngineer handles POST /admin/o2bar/engineers: register or (with
@@ -96,6 +148,7 @@ func (h *AIAgentHandler) CreateEngineer(c *gin.Context) {
 		respondAIAdminError(c, "creating O2Bar engineer failed", err, "")
 		return
 	}
+	auditAIAdminWrite(c, user, auditCreateEngineer, req.Engineer.Email)
 	c.JSON(http.StatusCreated, resp)
 }
 
@@ -119,7 +172,7 @@ func (h *AIAgentHandler) ListEngineers(c *gin.Context) {
 	c.JSON(http.StatusOK, engineers)
 }
 
-// DeleteEngineer handles DELETE /admin/o2bar/engineers?email=: remove an
+// DeleteEngineer handles DELETE /admin/o2bar/engineers/{email}: remove an
 // engineer from every attendee's recommendations. A 404 from con-ai means no
 // engineer holds that email.
 func (h *AIAgentHandler) DeleteEngineer(c *gin.Context) {
@@ -127,7 +180,7 @@ func (h *AIAgentHandler) DeleteEngineer(c *gin.Context) {
 	if !ok {
 		return
 	}
-	email, ok := requiredEmailQuery(c)
+	email, ok := emailPathParam(c)
 	if !ok {
 		return
 	}
@@ -136,17 +189,18 @@ func (h *AIAgentHandler) DeleteEngineer(c *gin.Context) {
 		respondAIAdminError(c, "deleting O2Bar engineer failed", err, "engineer not found")
 		return
 	}
+	auditAIAdminWrite(c, user, auditDeleteEngineer, email)
 	c.Status(http.StatusNoContent)
 }
 
-// EngineerExists handles GET /admin/o2bar/engineers/exists?email=: whether that
+// EngineerExists handles GET /admin/o2bar/engineers/{email}/exists: whether that
 // address belongs to an engineer on O2Bar duty.
 func (h *AIAgentHandler) EngineerExists(c *gin.Context) {
 	user, ok := h.requireAIAdmin(c)
 	if !ok {
 		return
 	}
-	email, ok := requiredEmailQuery(c)
+	email, ok := emailPathParam(c)
 	if !ok {
 		return
 	}
@@ -184,17 +238,18 @@ func (h *AIAgentHandler) AdminCreateProfile(c *gin.Context) {
 		respondAIAdminError(c, "creating attendee AI profile failed", err, "")
 		return
 	}
+	auditAIAdminWrite(c, user, auditCreateProfile, req.User.Email)
 	c.JSON(http.StatusCreated, resp)
 }
 
-// AdminGetProfile handles GET /admin/ai-profiles?email=: the stored AI profile
+// AdminGetProfile handles GET /admin/ai-profiles/{email}: the stored AI profile
 // document for an attendee. con-ai returns an arbitrary object, relayed as-is.
 func (h *AIAgentHandler) AdminGetProfile(c *gin.Context) {
 	user, ok := h.requireAIAdmin(c)
 	if !ok {
 		return
 	}
-	email, ok := requiredEmailQuery(c)
+	email, ok := emailPathParam(c)
 	if !ok {
 		return
 	}
@@ -207,14 +262,14 @@ func (h *AIAgentHandler) AdminGetProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, profile)
 }
 
-// AdminUpdateProfile handles PATCH /admin/ai-profiles?email=: re-embed an
+// AdminUpdateProfile handles PATCH /admin/ai-profiles/{email}: re-embed an
 // attendee's profile around fresh LinkedIn text.
 func (h *AIAgentHandler) AdminUpdateProfile(c *gin.Context) {
 	user, ok := h.requireAIAdmin(c)
 	if !ok {
 		return
 	}
-	email, ok := requiredEmailQuery(c)
+	email, ok := emailPathParam(c)
 	if !ok {
 		return
 	}
@@ -230,17 +285,18 @@ func (h *AIAgentHandler) AdminUpdateProfile(c *gin.Context) {
 		respondAIAdminError(c, "updating attendee AI profile failed", err, "profile not found")
 		return
 	}
+	auditAIAdminWrite(c, user, auditUpdateProfile, email)
 	c.JSON(http.StatusOK, profile)
 }
 
-// AdminDeleteProfile handles DELETE /admin/ai-profiles?email=: drop an
+// AdminDeleteProfile handles DELETE /admin/ai-profiles/{email}: drop an
 // attendee's AI profile. A 404 means no profile is stored for that email.
 func (h *AIAgentHandler) AdminDeleteProfile(c *gin.Context) {
 	user, ok := h.requireAIAdmin(c)
 	if !ok {
 		return
 	}
-	email, ok := requiredEmailQuery(c)
+	email, ok := emailPathParam(c)
 	if !ok {
 		return
 	}
@@ -249,17 +305,18 @@ func (h *AIAgentHandler) AdminDeleteProfile(c *gin.Context) {
 		respondAIAdminError(c, "deleting attendee AI profile failed", err, "profile not found")
 		return
 	}
+	auditAIAdminWrite(c, user, auditDeleteProfile, email)
 	c.Status(http.StatusNoContent)
 }
 
-// ProfileExists handles GET /admin/ai-profiles/exists?email=: whether an
+// ProfileExists handles GET /admin/ai-profiles/{email}/exists: whether an
 // attendee has a stored AI profile (a registration oracle on con-ai's side).
 func (h *AIAgentHandler) ProfileExists(c *gin.Context) {
 	user, ok := h.requireAIAdmin(c)
 	if !ok {
 		return
 	}
-	email, ok := requiredEmailQuery(c)
+	email, ok := emailPathParam(c)
 	if !ok {
 		return
 	}

@@ -260,15 +260,15 @@ var routeClasses = map[string]RouteInfo{
 	// writes are intents (each is a deliberate roster/profile change) and the
 	// reads are screen mounts of an admin console. Grouped under the AI-agent
 	// feature because that is the data they manage.
-	"POST /admin/o2bar/engineers":       {FeatureAIAgent, ClassIntent},
-	"GET /admin/o2bar/engineers":        {FeatureAIAgent, ClassScreen},
-	"DELETE /admin/o2bar/engineers":     {FeatureAIAgent, ClassIntent},
-	"GET /admin/o2bar/engineers/exists": {FeatureAIAgent, ClassScreen},
-	"POST /admin/ai-profiles":           {FeatureAIAgent, ClassIntent},
-	"GET /admin/ai-profiles":            {FeatureAIAgent, ClassScreen},
-	"PATCH /admin/ai-profiles":          {FeatureAIAgent, ClassIntent},
-	"DELETE /admin/ai-profiles":         {FeatureAIAgent, ClassIntent},
-	"GET /admin/ai-profiles/exists":     {FeatureAIAgent, ClassScreen},
+	"POST /admin/o2bar/engineers":              {FeatureAIAgent, ClassIntent},
+	"GET /admin/o2bar/engineers":               {FeatureAIAgent, ClassScreen},
+	"DELETE /admin/o2bar/engineers/:email":     {FeatureAIAgent, ClassIntent},
+	"GET /admin/o2bar/engineers/:email/exists": {FeatureAIAgent, ClassScreen},
+	"POST /admin/ai-profiles":                  {FeatureAIAgent, ClassIntent},
+	"GET /admin/ai-profiles/:email":            {FeatureAIAgent, ClassScreen},
+	"PATCH /admin/ai-profiles/:email":          {FeatureAIAgent, ClassIntent},
+	"DELETE /admin/ai-profiles/:email":         {FeatureAIAgent, ClassIntent},
+	"GET /admin/ai-profiles/:email/exists":     {FeatureAIAgent, ClassScreen},
 }
 
 // RoutePolicy decides whether a route is recorded and what it means. It holds no

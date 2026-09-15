@@ -208,14 +208,19 @@ type AIFeatureStatus struct {
 // a date" rule is con-ai's alone (an undated slot is silently dropped the next
 // day, so con-ai refuses it up front) and is left to con-ai to enforce.
 type EngineerProfileInput struct {
-	Email                    string `json:"email" binding:"required,email"`
-	Name                     string `json:"name" binding:"required"`
-	Title                    string `json:"title" binding:"required"`
-	LinkedInProfileURL       string `json:"linkedInProfileUrl"`
-	Domains                  string `json:"domains" binding:"required"`
-	FamiliarProducts         string `json:"familiarProducts" binding:"required"`
-	SpecializeAreas          string `json:"specializeAreas" binding:"required"`
-	YearsOfWorkingExperience int    `json:"yearsOfWorkingExperience" binding:"gte=0,lte=60"`
+	Email              string `json:"email" binding:"required,email"`
+	Name               string `json:"name" binding:"required"`
+	Title              string `json:"title" binding:"required"`
+	LinkedInProfileURL string `json:"linkedInProfileUrl"`
+	Domains            string `json:"domains" binding:"required"`
+	FamiliarProducts   string `json:"familiarProducts" binding:"required"`
+	SpecializeAreas    string `json:"specializeAreas" binding:"required"`
+	// A pointer so that an omitted field is distinguishable from a submitted
+	// zero. As a plain int both decode to 0, which passes gte=0 and registers
+	// the engineer with no experience at all -- while openapi.yaml lists the
+	// field as required. required on the pointer restores that agreement and
+	// still lets a genuine 0 through.
+	YearsOfWorkingExperience *int   `json:"yearsOfWorkingExperience" binding:"required,gte=0,lte=60"`
 	ExampleQuestions         string `json:"exampleQuestions" binding:"required"`
 	AvailableTimeSlots       string `json:"availableTimeSlots" binding:"required"`
 }

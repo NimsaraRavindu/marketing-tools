@@ -343,13 +343,13 @@ func main() {
 		// switched on.
 		api.POST("/admin/o2bar/engineers", aiAgentHandler.CreateEngineer)
 		api.GET("/admin/o2bar/engineers", aiAgentHandler.ListEngineers)
-		api.DELETE("/admin/o2bar/engineers", aiAgentHandler.DeleteEngineer)
-		api.GET("/admin/o2bar/engineers/exists", aiAgentHandler.EngineerExists)
+		api.DELETE("/admin/o2bar/engineers/:email", aiAgentHandler.DeleteEngineer)
+		api.GET("/admin/o2bar/engineers/:email/exists", aiAgentHandler.EngineerExists)
 		api.POST("/admin/ai-profiles", aiAgentHandler.AdminCreateProfile)
-		api.GET("/admin/ai-profiles", aiAgentHandler.AdminGetProfile)
-		api.PATCH("/admin/ai-profiles", aiAgentHandler.AdminUpdateProfile)
-		api.DELETE("/admin/ai-profiles", aiAgentHandler.AdminDeleteProfile)
-		api.GET("/admin/ai-profiles/exists", aiAgentHandler.ProfileExists)
+		api.GET("/admin/ai-profiles/:email", aiAgentHandler.AdminGetProfile)
+		api.PATCH("/admin/ai-profiles/:email", aiAgentHandler.AdminUpdateProfile)
+		api.DELETE("/admin/ai-profiles/:email", aiAgentHandler.AdminDeleteProfile)
+		api.GET("/admin/ai-profiles/:email/exists", aiAgentHandler.ProfileExists)
 
 		// Leaderboard route
 		api.GET("/leaderboard", leaderboardHandler.GetLeaderboard)

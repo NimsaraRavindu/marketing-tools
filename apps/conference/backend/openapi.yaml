@@ -1591,6 +1591,21 @@ paths:
         "400": { description: "Invalid request body or a rejected engineer field." }
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     get:
       tags: [o2bar]
       summary: List O2Bar engineers (admin only)
@@ -1607,6 +1622,22 @@ paths:
                 items: { $ref: "#/components/schemas/EngineerSummary" }
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/o2bar/engineers/{email}:
     delete:
       tags: [o2bar]
       summary: Remove an O2Bar engineer (admin only)
@@ -1615,24 +1646,45 @@ paths:
         AI_ADMIN_ROLES.
       parameters:
         - name: email
-          in: query
+          in: path
           required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
           schema: { type: string, format: email }
       responses:
         "204": { description: "Removed. No body." }
-        "400": { description: "The email query parameter is required." }
+        "400": { description: "The email path segment is blank." }
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
         "404": { description: "No engineer holds that email." }
-  /admin/o2bar/engineers/exists:
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/o2bar/engineers/{email}/exists:
     get:
       tags: [o2bar]
       summary: Whether an address is an O2Bar engineer (admin only)
       description: Restricted to AI_ADMIN_ROLES.
       parameters:
         - name: email
-          in: query
+          in: path
           required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
           schema: { type: string, format: email }
       responses:
         "200":
@@ -1640,9 +1692,24 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ExistsResponse" }
-        "400": { description: "The email query parameter is required." }
+        "400": { description: "The email path segment is blank." }
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
   /admin/ai-profiles:
     post:
       tags: [personalize]
@@ -1666,14 +1733,33 @@ paths:
         "400": { description: "Invalid body, or user.email is missing." }
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/ai-profiles/{email}:
     get:
       tags: [personalize]
       summary: Fetch an attendee's stored AI profile (admin only)
       description: Restricted to AI_ADMIN_ROLES. The profile document is relayed as-is.
       parameters:
         - name: email
-          in: query
+          in: path
           required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
           schema: { type: string, format: email }
       responses:
         "200":
@@ -1681,18 +1767,36 @@ paths:
           content:
             application/json:
               schema: { type: object, additionalProperties: true }
-        "400": { description: "The email query parameter is required." }
+        "400": { description: "The email path segment is blank." }
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
         "404": { description: "No profile stored for that email." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     patch:
       tags: [personalize]
       summary: Re-embed an attendee's AI profile from fresh LinkedIn text (admin only)
       description: Restricted to AI_ADMIN_ROLES.
       parameters:
         - name: email
-          in: query
+          in: path
           required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
           schema: { type: string, format: email }
       requestBody:
         required: true
@@ -1709,30 +1813,66 @@ paths:
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
         "404": { description: "No profile stored for that email." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     delete:
       tags: [personalize]
       summary: Delete an attendee's AI profile (admin only)
       description: Restricted to AI_ADMIN_ROLES.
       parameters:
         - name: email
-          in: query
+          in: path
           required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
           schema: { type: string, format: email }
       responses:
         "204": { description: "Deleted. No body." }
-        "400": { description: "The email query parameter is required." }
+        "400": { description: "The email path segment is blank." }
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
         "404": { description: "No profile stored for that email." }
-  /admin/ai-profiles/exists:
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/ai-profiles/{email}/exists:
     get:
       tags: [personalize]
       summary: Whether an attendee has a stored AI profile (admin only)
       description: Restricted to AI_ADMIN_ROLES.
       parameters:
         - name: email
-          in: query
+          in: path
           required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
           schema: { type: string, format: email }
       responses:
         "200":
@@ -1740,9 +1880,24 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ExistsResponse" }
-        "400": { description: "The email query parameter is required." }
+        "400": { description: "The email path segment is blank." }
         "401": { description: "Missing authentication." }
         "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
 components:
   securitySchemes:
