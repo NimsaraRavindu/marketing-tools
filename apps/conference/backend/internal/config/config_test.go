@@ -28,7 +28,7 @@ func clearEnv(t *testing.T) {
 	keys := []string{
 		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SCHEMA", "DB_SSLMODE",
 		"PORT", "LOG_LEVEL", "APP_ENV",
-		"TOKEN_VALIDATOR_ENABLED", "JWKS_ENDPOINT", "JWT_ISSUER", "JWT_AUDIENCE", "RBAC_ADMIN_ROLES",
+		"TOKEN_VALIDATOR_ENABLED", "JWKS_ENDPOINT", "JWT_ISSUER", "JWT_AUDIENCE", "RBAC_ADMIN_ROLES", "AI_ADMIN_ROLES",
 		"EXCLUDE_EMPLOYEE_COIN_ALLOCATION", "ENABLE_QR_VALIDATIONS", "SESSION_END_TIME_OFFSET_MINUTES", "SESSION_SLOT_MINUTES",
 		"QR_PORTAL_ENDPOINT", "QR_PORTAL_TOKEN_URL", "QR_PORTAL_CLIENT_ID", "QR_PORTAL_CLIENT_SECRET",
 		"WALLET_ENDPOINT", "WALLET_TOKEN_URL", "WALLET_CLIENT_ID", "WALLET_CLIENT_SECRET",
@@ -125,6 +125,7 @@ func TestValidate_RejectsInvalidVenueTimezone(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 	t.Setenv("VENUE_TIMEZONE", "Not/ARealZone")
 
 	cfg := Load()
@@ -151,6 +152,33 @@ func TestLoad_RBACAdminRolesParsedAsList(t *testing.T) {
 		if cfg.AdminRoles[i] != w {
 			t.Errorf("AdminRoles[%d] = %q, want %q", i, cfg.AdminRoles[i], w)
 		}
+	}
+}
+
+func TestLoad_AIAdminRolesParsedAsList(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("AI_ADMIN_ROLES", "o2bar-admin-stg, o2bar-admin-prod ,other")
+
+	cfg := Load()
+
+	want := []string{"o2bar-admin-stg", "o2bar-admin-prod", "other"}
+	if len(cfg.AIAdminRoles) != len(want) {
+		t.Fatalf("expected %d AI admin roles, got %d (%v)", len(want), len(cfg.AIAdminRoles), cfg.AIAdminRoles)
+	}
+	for i, w := range want {
+		if cfg.AIAdminRoles[i] != w {
+			t.Errorf("AIAdminRoles[%d] = %q, want %q", i, cfg.AIAdminRoles[i], w)
+		}
+	}
+}
+
+func TestLoad_AIAdminRolesUnsetIsNil(t *testing.T) {
+	clearEnv(t)
+
+	cfg := Load()
+
+	if cfg.AIAdminRoles != nil {
+		t.Errorf("expected AIAdminRoles nil when AI_ADMIN_ROLES unset, got %v", cfg.AIAdminRoles)
 	}
 }
 
@@ -252,6 +280,7 @@ func TestValidate_DoesNotRequireAIAgentFields(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 
 	cfg := Load()
 	if err := cfg.Validate(); err != nil {
@@ -275,6 +304,7 @@ func TestValidate_OKWithRequiredFieldsInDevelopment(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 
 	cfg := Load()
 	if err := cfg.Validate(); err != nil {
@@ -285,6 +315,7 @@ func TestValidate_OKWithRequiredFieldsInDevelopment(t *testing.T) {
 func TestLoad_PIIEncryptionKeyDecodedFromBase64(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 
 	cfg := Load()
 	if len(cfg.PIIEncryptionKey) != 32 {
@@ -329,6 +360,7 @@ func TestValidate_RejectsInvalidBase64PIIEncryptionKey(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "not-valid-base64!!!")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 
 	cfg := Load()
 	err := cfg.Validate()
@@ -567,6 +599,7 @@ func TestValidate_InsecureAuthConfigIsNotFatal(t *testing.T) {
 	t.Setenv("DB_PASSWORD", "pw")
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("PII_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 
 	cfg := Load()
 	if !cfg.InsecureAuthConfig() {
@@ -587,6 +620,7 @@ func TestShopPaymentsConfigured(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("DB_PASSWORD", "pw")
 	t.Setenv("PII_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 
 	cfg := Load()
 	if cfg.ShopPaymentsConfigured() {
@@ -661,6 +695,7 @@ func TestValidate_MoesifEnabledRequiresApplicationID(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 	t.Setenv("MOESIF_ENABLED", "true")
 
 	cfg := Load()
@@ -683,6 +718,7 @@ func TestValidate_MoesifRejectsPlaintextEndpoint(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 	t.Setenv("MOESIF_ENABLED", "true")
 	t.Setenv("MOESIF_APPLICATION_ID", "collector-app-id")
 	t.Setenv("MOESIF_API_ENDPOINT", "http://api.moesif.net")
@@ -707,6 +743,7 @@ func TestValidate_MoesifAllowsLoopbackStub(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 	t.Setenv("MOESIF_ENABLED", "true")
 	t.Setenv("MOESIF_APPLICATION_ID", "collector-app-id")
 	t.Setenv("MOESIF_API_ENDPOINT", "http://localhost:9999")
@@ -725,6 +762,7 @@ func TestValidate_MoesifDisabledNeedsNothing(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 
 	cfg := Load()
 	if err := cfg.Validate(); err != nil {
@@ -743,6 +781,11 @@ func validAIBaseConfig(t *testing.T) {
 	t.Setenv("DB_SCHEMA", "marketingops")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PII_ENCRYPTION_KEY", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
+	// Validate() refuses without it, so a base config that calls itself valid
+	// has to carry it; otherwise every caller fails on this instead of on the
+	// field it came to test.
+	t.Setenv("REGISTRANT_SERVICE_URL", "https://registrant.example")
 }
 
 func TestValidate_RejectsEnabledAIWithoutServiceURL(t *testing.T) {

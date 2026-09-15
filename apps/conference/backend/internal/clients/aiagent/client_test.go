@@ -476,3 +476,293 @@ func TestNewClient_NonPositiveTimeoutFallsBackToDefault(t *testing.T) {
 		})
 	}
 }
+
+// --- Admin AI-management calls -------------------------------------------
+
+// adminRoundTrip captures what one admin call put on the wire so a single table
+// can assert method, path, the email query param, the x-jwt-assertion header and
+// whether a body was sent (only POST/PATCH should send one).
+type adminRoundTrip struct {
+	method    string
+	path      string
+	rawQuery  string
+	assertion string
+	bodyLen   int
+	hasCT     bool
+}
+
+func TestAdminCalls_WireContract(t *testing.T) {
+	const jwt = "admin-jwt-assertion"
+
+	tests := []struct {
+		name       string
+		respStatus int
+		respBody   string
+		call       func(c *Client) error
+		wantMethod string
+		wantPath   string
+		wantEmail  string
+		wantBody   bool
+	}{
+		{
+			name:       "CreateEngineer",
+			respStatus: http.StatusCreated,
+			respBody:   `{"id":"e1","email":"eng@wso2.com","name":"Eng","created":true,"message":"added"}`,
+			call: func(c *Client) error {
+				got, err := c.CreateEngineer(context.Background(), jwt, models.EngineerCreateRequest{
+					Engineer: models.EngineerProfileInput{Email: "eng@wso2.com", Name: "Eng"},
+					Override: true,
+				})
+				if err != nil {
+					return err
+				}
+				if got.ID != "e1" || !got.Created {
+					t.Errorf("decoded = %+v, want id e1 created true", got)
+				}
+				return nil
+			},
+			wantMethod: http.MethodPost, wantPath: "/engineer/create", wantBody: true,
+		},
+		{
+			name:       "ListEngineers",
+			respStatus: http.StatusOK,
+			respBody:   `[{"email":"eng@wso2.com","name":"Eng","title":"SE","linkedInProfileUrl":"","availableTimeSlots":[{"startTime":"2026-09-22T09:00:00+03:00","endTime":"2026-09-22T10:00:00+03:00"}]}]`,
+			call: func(c *Client) error {
+				got, err := c.ListEngineers(context.Background(), jwt)
+				if err != nil {
+					return err
+				}
+				if len(got) != 1 || got[0].Email != "eng@wso2.com" || len(got[0].AvailableTimeSlots) != 1 {
+					t.Errorf("decoded = %+v, want one engineer with one slot", got)
+				}
+				return nil
+			},
+			wantMethod: http.MethodGet, wantPath: "/engineers", wantBody: false,
+		},
+		{
+			name:       "DeleteEngineer",
+			respStatus: http.StatusNoContent,
+			call: func(c *Client) error {
+				return c.DeleteEngineer(context.Background(), jwt, "eng@wso2.com")
+			},
+			wantMethod: http.MethodDelete, wantPath: "/engineers", wantEmail: "eng@wso2.com", wantBody: false,
+		},
+		{
+			name:       "EngineerExists",
+			respStatus: http.StatusOK,
+			respBody:   `{"exists":true}`,
+			call: func(c *Client) error {
+				got, err := c.EngineerExists(context.Background(), jwt, "eng@wso2.com")
+				if err != nil {
+					return err
+				}
+				if !got.Exists {
+					t.Errorf("exists = false, want true")
+				}
+				return nil
+			},
+			wantMethod: http.MethodGet, wantPath: "/engineer/exists", wantEmail: "eng@wso2.com", wantBody: false,
+		},
+		{
+			name:       "AdminCreateProfile",
+			respStatus: http.StatusCreated,
+			respBody:   `{"id":"p1","email":"a@wso2.com","name":"A","company":"WSO2","title":"SE","created":true,"message":"ok"}`,
+			call: func(c *Client) error {
+				got, err := c.AdminCreateProfile(context.Background(), jwt, models.AdminProfileCreateRequest{
+					User:     models.PersonalizeAgentUserProfile{Email: "a@wso2.com", Name: "A"},
+					Override: true,
+				})
+				if err != nil {
+					return err
+				}
+				if got.ID != "p1" || got.Company != "WSO2" {
+					t.Errorf("decoded = %+v, want id p1 company WSO2", got)
+				}
+				return nil
+			},
+			wantMethod: http.MethodPost, wantPath: "/profile/create", wantBody: true,
+		},
+		{
+			name:       "AdminGetProfile",
+			respStatus: http.StatusOK,
+			respBody:   `{"email":"a@wso2.com","document":"researched text"}`,
+			call: func(c *Client) error {
+				got, err := c.AdminGetProfile(context.Background(), jwt, "a@wso2.com")
+				if err != nil {
+					return err
+				}
+				if got["document"] != "researched text" {
+					t.Errorf("decoded = %+v, want document field", got)
+				}
+				return nil
+			},
+			wantMethod: http.MethodGet, wantPath: "/profile", wantEmail: "a@wso2.com", wantBody: false,
+		},
+		{
+			name:       "AdminUpdateProfile",
+			respStatus: http.StatusOK,
+			respBody:   `{"email":"a@wso2.com","message":"updated"}`,
+			call: func(c *Client) error {
+				got, err := c.AdminUpdateProfile(context.Background(), jwt, "a@wso2.com", models.AdminProfileUpdateRequest{LinkedInInfo: "fresh"})
+				if err != nil {
+					return err
+				}
+				if got["message"] != "updated" {
+					t.Errorf("decoded = %+v, want updated message", got)
+				}
+				return nil
+			},
+			wantMethod: http.MethodPatch, wantPath: "/profile", wantEmail: "a@wso2.com", wantBody: true,
+		},
+		{
+			name:       "AdminDeleteProfile",
+			respStatus: http.StatusNoContent,
+			call: func(c *Client) error {
+				return c.AdminDeleteProfile(context.Background(), jwt, "a@wso2.com")
+			},
+			wantMethod: http.MethodDelete, wantPath: "/profile", wantEmail: "a@wso2.com", wantBody: false,
+		},
+		{
+			name:       "ProfileExists",
+			respStatus: http.StatusOK,
+			respBody:   `{"exists":false}`,
+			call: func(c *Client) error {
+				got, err := c.ProfileExists(context.Background(), jwt, "a@wso2.com")
+				if err != nil {
+					return err
+				}
+				if got.Exists {
+					t.Errorf("exists = true, want false")
+				}
+				return nil
+			},
+			wantMethod: http.MethodGet, wantPath: "/profile/exists", wantEmail: "a@wso2.com", wantBody: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var got adminRoundTrip
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				got = adminRoundTrip{
+					method:    r.Method,
+					path:      r.URL.Path,
+					rawQuery:  r.URL.Query().Get("email"),
+					assertion: r.Header.Get("x-jwt-assertion"),
+					bodyLen:   len(body),
+					hasCT:     r.Header.Get("Content-Type") != "",
+				}
+				w.WriteHeader(tc.respStatus)
+				if tc.respBody != "" {
+					_, _ = w.Write([]byte(tc.respBody))
+				}
+			}))
+			defer server.Close()
+
+			client := NewClientWithHTTPClient(config.AIAgentConfig{ServiceURL: server.URL}, server.Client())
+			if err := tc.call(client); err != nil {
+				t.Fatalf("call returned error: %v", err)
+			}
+
+			if got.method != tc.wantMethod {
+				t.Errorf("method = %q, want %q", got.method, tc.wantMethod)
+			}
+			if got.path != tc.wantPath {
+				t.Errorf("path = %q, want %q", got.path, tc.wantPath)
+			}
+			if got.rawQuery != tc.wantEmail {
+				t.Errorf("email query = %q, want %q", got.rawQuery, tc.wantEmail)
+			}
+			if got.assertion != jwt {
+				t.Errorf("x-jwt-assertion = %q, want %q", got.assertion, jwt)
+			}
+			if tc.wantBody {
+				if got.bodyLen == 0 {
+					t.Errorf("expected a request body, got none")
+				}
+				if !got.hasCT {
+					t.Errorf("expected Content-Type on a body request")
+				}
+			} else {
+				if got.bodyLen != 0 {
+					t.Errorf("expected no request body, got %d bytes", got.bodyLen)
+				}
+				if got.hasCT {
+					t.Errorf("expected no Content-Type on a bodyless request")
+				}
+			}
+		})
+	}
+}
+
+// TestAdminCalls_Non2xxIsStatusError proves every admin call surfaces a non-2xx
+// as a *StatusError carrying the code, which is what lets the handler tell a
+// con-ai 400/404 (relay) from a gateway 401/403 (credential fault).
+func TestAdminCalls_Non2xxIsStatusError(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		call   func(c *Client) error
+	}{
+		{
+			name:   "CreateEngineer 400",
+			status: http.StatusBadRequest,
+			body:   `{"detail":"Each time slot needs a date"}`,
+			call: func(c *Client) error {
+				_, err := c.CreateEngineer(context.Background(), "jwt", models.EngineerCreateRequest{})
+				return err
+			},
+		},
+		{
+			name:   "DeleteEngineer 404",
+			status: http.StatusNotFound,
+			body:   `{"detail":"Engineer not found"}`,
+			call: func(c *Client) error {
+				return c.DeleteEngineer(context.Background(), "jwt", "nope@wso2.com")
+			},
+		},
+		{
+			name:   "AdminGetProfile 404",
+			status: http.StatusNotFound,
+			body:   `{"detail":"Profile not found"}`,
+			call: func(c *Client) error {
+				_, err := c.AdminGetProfile(context.Background(), "jwt", "nope@wso2.com")
+				return err
+			},
+		},
+		{
+			name:   "ListEngineers gateway 401",
+			status: http.StatusUnauthorized,
+			body:   `{"code":"900901","error_message":"Invalid Credentials"}`,
+			call: func(c *Client) error {
+				_, err := c.ListEngineers(context.Background(), "jwt")
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			client := NewClientWithHTTPClient(config.AIAgentConfig{ServiceURL: server.URL}, server.Client())
+			err := tc.call(client)
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+			code, ok := StatusCodeFrom(err)
+			if !ok {
+				t.Fatalf("error is not a *StatusError: %v", err)
+			}
+			if code != tc.status {
+				t.Errorf("status = %d, want %d", code, tc.status)
+			}
+		})
+	}
+}

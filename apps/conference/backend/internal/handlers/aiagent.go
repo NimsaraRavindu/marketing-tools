@@ -41,6 +41,19 @@ type AIAgentClient interface {
 	SendProfileInfo(ctx context.Context, jwtAssertion string, profile models.PersonalizeAgentUserProfile) (*http.Response, error)
 	RetrieveAgendaRecommendations(ctx context.Context, jwtAssertion string) ([]models.PickedForYouSession, error)
 	RetrieveChatResponse(ctx context.Context, jwtAssertion string, req models.ChatRequest) (*models.ChatResponse, error)
+
+	// Admin roster/profile management. These proxy con-ai's unrestricted
+	// engineer and profile routes; the caller-facing gate is the RBAC check in
+	// the admin handlers, not con-ai (which authenticates nobody).
+	CreateEngineer(ctx context.Context, jwtAssertion string, req models.EngineerCreateRequest) (*models.EngineerResponse, error)
+	ListEngineers(ctx context.Context, jwtAssertion string) ([]models.EngineerSummary, error)
+	DeleteEngineer(ctx context.Context, jwtAssertion, email string) error
+	EngineerExists(ctx context.Context, jwtAssertion, email string) (*models.ExistsResponse, error)
+	AdminCreateProfile(ctx context.Context, jwtAssertion string, req models.AdminProfileCreateRequest) (*models.ProfileResponse, error)
+	AdminGetProfile(ctx context.Context, jwtAssertion, email string) (map[string]any, error)
+	AdminUpdateProfile(ctx context.Context, jwtAssertion, email string, req models.AdminProfileUpdateRequest) (map[string]any, error)
+	AdminDeleteProfile(ctx context.Context, jwtAssertion, email string) error
+	ProfileExists(ctx context.Context, jwtAssertion, email string) (*models.ExistsResponse, error)
 }
 
 // SessionDayReader resolves session ids to their conference_days id, used to
@@ -57,15 +70,23 @@ type AIAgentHandler struct {
 	attendees     AttendeeProfileReader
 	featureStatus config.AIFeatureStatus
 	sessionDays   SessionDayReader
+	// aiAdminRoles is the allow-list of JWT groups permitted to call the admin
+	// engineer/profile management routes (config.Config.AIAdminRoles, from
+	// AI_ADMIN_ROLES). Empty locks those routes down rather than opening them:
+	// con-ai enforces nothing, so this is the only gate in front of routes that
+	// can rewrite any attendee's profile and everyone's O2Bar recommendations.
+	aiAdminRoles []string
 }
 
 // NewAIAgentHandler constructs an AIAgentHandler. attendees resolves
 // uuid/profileUrl enrichment for the matches/O2Bar routes (see
 // .claude/PLAN.md); featureStatus is echoed as-is by MaintenanceStatus.
 // sessionDays day-associates agenda recommendations (Phase E); pass nil to
-// disable that enrichment (e.g. in tests that don't exercise it).
-func NewAIAgentHandler(client AIAgentClient, attendees AttendeeProfileReader, featureStatus config.AIFeatureStatus, sessionDays SessionDayReader) *AIAgentHandler {
-	return &AIAgentHandler{client: client, attendees: attendees, featureStatus: featureStatus, sessionDays: sessionDays}
+// disable that enrichment (e.g. in tests that don't exercise it). aiAdminRoles
+// is the group allow-list for the admin management routes; an empty list denies
+// every caller (see AIAgentHandler.aiAdminRoles).
+func NewAIAgentHandler(client AIAgentClient, attendees AttendeeProfileReader, featureStatus config.AIFeatureStatus, sessionDays SessionDayReader, aiAdminRoles []string) *AIAgentHandler {
+	return &AIAgentHandler{client: client, attendees: attendees, featureStatus: featureStatus, sessionDays: sessionDays, aiAdminRoles: aiAdminRoles}
 }
 
 // respondFeatureDisabled writes the standard response for an AI feature whose

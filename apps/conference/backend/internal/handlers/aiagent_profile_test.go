@@ -30,7 +30,7 @@ import (
 )
 
 func TestAIAgentHandler_PersonalizedProfile_Unauthenticated(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{})
@@ -57,7 +57,7 @@ func TestAIAgentHandler_PersonalizedProfile_PassesThroughRawResponse(t *testing.
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(strings.NewReader(tt.body)),
 			}}
-			h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+			h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 			r := newAIAgentTestRouter(h, testUser)
 
 			w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{Email: "a@wso2.com"})
@@ -75,7 +75,7 @@ func TestAIAgentHandler_PersonalizedProfile_PassesThroughRawResponse(t *testing.
 }
 
 func TestAIAgentHandler_PersonalizedProfile_ClientCallFailure_Returns500(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{profileErr: errBoom}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{profileErr: errBoom}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{})
@@ -85,7 +85,7 @@ func TestAIAgentHandler_PersonalizedProfile_ClientCallFailure_Returns500(t *test
 }
 
 func TestAIAgentHandler_PersonalizedProfile_MalformedBody_Returns400(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	req := httptest.NewRequest(http.MethodPost, "/users/profile", strings.NewReader("{not json"))
@@ -107,7 +107,7 @@ func TestAIAgentHandler_PersonalizedProfile_ForcesCallerEmail(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(`{"status":"accepted"}`)),
 	}}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{
@@ -124,7 +124,7 @@ func TestAIAgentHandler_PersonalizedProfile_ForcesCallerEmail(t *testing.T) {
 func TestAIAgentHandler_PersonalizedProfile_FeatureDisabled_Returns503(t *testing.T) {
 	// Shares EnabledPersonalizedAgenda with GET /agenda/recommendations.
 	client := &fakeAIAgentClient{profileErr: errBoom}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{EnabledPersonalizedAgenda: false}, nil)
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{EnabledPersonalizedAgenda: false}, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{Name: "X"})
@@ -181,7 +181,7 @@ func TestAIAgentHandler_PersonalizedProfile_GatewayRejection_Returns500(t *testi
 		t.Run(tt.name, func(t *testing.T) {
 			logs := captureAILogs(t)
 			client := &fakeAIAgentClient{profileResp: profileResponse(tt.status, "application/json", tt.body, tt.withRequest)}
-			h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+			h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 			r := newAIAgentTestRouter(h, testUser)
 
 			w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{Name: "A"})
@@ -230,7 +230,7 @@ func TestAIAgentHandler_PersonalizedProfile_NonGatewayStatusesRelayedVerbatim(t 
 			// withRequest is true throughout: the verbatim path has to work on
 			// the real client's response shape, not only on a bare double.
 			client := &fakeAIAgentClient{profileResp: profileResponse(tt.status, tt.contentType, tt.body, true)}
-			h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+			h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 			r := newAIAgentTestRouter(h, testUser)
 
 			w := doRequest(r, http.MethodPost, "/users/profile", models.PersonalizeAgentUserProfile{Name: "A"})

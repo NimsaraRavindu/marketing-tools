@@ -254,6 +254,21 @@ var routeClasses = map[string]RouteInfo{
 	// Admin broadcast. Single-digit volume, but the one endpoint where knowing
 	// exactly how many times it fired matters.
 	"POST /users/notifications": {FeatureNotifications, ClassIntent},
+
+	// Admin AI management (AI_ADMIN_ROLES-gated): O2Bar engineer roster and
+	// attendee AI profiles. Operator actions, not attendee traffic, so the
+	// writes are intents (each is a deliberate roster/profile change) and the
+	// reads are screen mounts of an admin console. Grouped under the AI-agent
+	// feature because that is the data they manage.
+	"POST /admin/o2bar/engineers":       {FeatureAIAgent, ClassIntent},
+	"GET /admin/o2bar/engineers":        {FeatureAIAgent, ClassScreen},
+	"DELETE /admin/o2bar/engineers":     {FeatureAIAgent, ClassIntent},
+	"GET /admin/o2bar/engineers/exists": {FeatureAIAgent, ClassScreen},
+	"POST /admin/ai-profiles":           {FeatureAIAgent, ClassIntent},
+	"GET /admin/ai-profiles":            {FeatureAIAgent, ClassScreen},
+	"PATCH /admin/ai-profiles":          {FeatureAIAgent, ClassIntent},
+	"DELETE /admin/ai-profiles":         {FeatureAIAgent, ClassIntent},
+	"GET /admin/ai-profiles/exists":     {FeatureAIAgent, ClassScreen},
 }
 
 // RoutePolicy decides whether a route is recorded and what it means. It holds no

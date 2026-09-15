@@ -192,3 +192,96 @@ type AIFeatureStatus struct {
 	EnabledMatchMaker         bool `json:"enabledMatchMaker"`
 	EnabledO2Bar              bool `json:"enabledO2Bar"`
 }
+
+// The types below back the admin-only AI-management routes (O2Bar engineer
+// roster and attendee AI-profile management). They mirror the con-ai
+// EngineerCreate/EngineerResponse/EngineerSummary and ProfileResponse/
+// ExistsResponse schemas one-for-one, because these routes proxy con-ai's own
+// roster and profile endpoints -- the ones the attendee-facing AI features read
+// from but never let a caller write to. con-ai authenticates nobody, so the
+// write side is exposed only here, behind the backend's own admin-group check.
+
+// EngineerProfileInput is one O2Bar engineer as submitted for registration. It
+// mirrors con-ai's EngineerCreate. The binding tags reject at this backend what
+// con-ai would otherwise 422 on, so an admin gets a plain 400 rather than the
+// gateway's error taxonomy -- except availableTimeSlots, whose "every slot needs
+// a date" rule is con-ai's alone (an undated slot is silently dropped the next
+// day, so con-ai refuses it up front) and is left to con-ai to enforce.
+type EngineerProfileInput struct {
+	Email                    string `json:"email" binding:"required,email"`
+	Name                     string `json:"name" binding:"required"`
+	Title                    string `json:"title" binding:"required"`
+	LinkedInProfileURL       string `json:"linkedInProfileUrl"`
+	Domains                  string `json:"domains" binding:"required"`
+	FamiliarProducts         string `json:"familiarProducts" binding:"required"`
+	SpecializeAreas          string `json:"specializeAreas" binding:"required"`
+	YearsOfWorkingExperience int    `json:"yearsOfWorkingExperience" binding:"gte=0,lte=60"`
+	ExampleQuestions         string `json:"exampleQuestions" binding:"required"`
+	AvailableTimeSlots       string `json:"availableTimeSlots" binding:"required"`
+}
+
+// EngineerCreateRequest is the body for registering (or, with Override,
+// overwriting) an O2Bar engineer. The nested Engineer carries no binding:required
+// tag on purpose: gin's validator descends into a nested struct value on its own,
+// and a required tag on a struct value never sees it as "present". Override is a
+// bool for the same reason -- required on a bool would reject the legitimate
+// false.
+type EngineerCreateRequest struct {
+	Engineer EngineerProfileInput `json:"engineer"`
+	Override bool                 `json:"override"`
+}
+
+// EngineerResponse mirrors con-ai's EngineerResponse. Created is false with an
+// explanatory Message when the engineer already existed and Override was not set.
+type EngineerResponse struct {
+	ID      string `json:"id"`
+	Email   string `json:"email"`
+	Name    string `json:"name"`
+	Created bool   `json:"created"`
+	Message string `json:"message"`
+}
+
+// EngineerSummary is one row of the O2Bar staff directory, mirroring con-ai's
+// EngineerSummary. AvailableTimeSlots reuses O2BarTimeSlot.
+type EngineerSummary struct {
+	Email              string          `json:"email"`
+	Name               string          `json:"name"`
+	Title              string          `json:"title"`
+	LinkedInProfileURL string          `json:"linkedInProfileUrl"`
+	AvailableTimeSlots []O2BarTimeSlot `json:"availableTimeSlots"`
+}
+
+// AdminProfileCreateRequest is the body for the admin attendee-profile create
+// route. Unlike POST /users/profile (which keys the profile on the caller's own
+// JWT email), the admin route acts on an arbitrary attendee, so the email rides
+// inside User and is not overwritten. User carries no binding:required tag for
+// the same nested-struct reason as EngineerCreateRequest.Engineer.
+type AdminProfileCreateRequest struct {
+	User     PersonalizeAgentUserProfile `json:"user"`
+	Override bool                        `json:"override"`
+}
+
+// AdminProfileUpdateRequest mirrors con-ai's ProfileUpdateRequest: a profile
+// PATCH re-merges and re-embeds around fresh LinkedIn text, which con-ai requires
+// to be non-empty.
+type AdminProfileUpdateRequest struct {
+	LinkedInInfo string `json:"linkedInInfo" binding:"required"`
+}
+
+// ProfileResponse mirrors con-ai's ProfileResponse, returned by the admin
+// profile-create route.
+type ProfileResponse struct {
+	ID      string `json:"id"`
+	Email   string `json:"email"`
+	Name    string `json:"name"`
+	Company string `json:"company"`
+	Title   string `json:"title"`
+	Created bool   `json:"created"`
+	Message string `json:"message"`
+}
+
+// ExistsResponse mirrors con-ai's ExistsResponse, returned by the engineer- and
+// profile-exists probes.
+type ExistsResponse struct {
+	Exists bool `json:"exists"`
+}

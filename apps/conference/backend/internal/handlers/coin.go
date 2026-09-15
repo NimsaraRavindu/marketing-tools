@@ -158,18 +158,7 @@ func (h *CoinHandler) GetGeneratedQRs(c *gin.Context) {
 		return
 	}
 
-	isAdmin := false
-	for _, g := range user.Groups {
-		for _, adminRole := range h.adminRoles {
-			if g == adminRole {
-				isAdmin = true
-				break
-			}
-		}
-		if isAdmin {
-			break
-		}
-	}
+	isAdmin := user.HasAnyGroup(h.adminRoles)
 
 	res, err := h.catalog.GetQRCodes(c.Request.Context())
 	if err != nil {

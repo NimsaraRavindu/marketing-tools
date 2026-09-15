@@ -372,3 +372,190 @@ func (c *Client) newRequest(ctx context.Context, path, jwtAssertion string, body
 	req.Header.Set("x-jwt-assertion", jwtAssertion)
 	return req, nil
 }
+
+// --- Admin AI-management calls -------------------------------------------
+//
+// These proxy con-ai's engineer-roster and attendee-profile *write* endpoints,
+// which the attendee-facing features only ever read from. Unlike the recommend/
+// chat calls above they are not all POST -- listing and existence probes are GET,
+// removal is DELETE, a LinkedIn refresh is PATCH -- and several key on an `email`
+// query parameter rather than a body. They share the same credentials as every
+// other call: x-jwt-assertion carries the (admin) caller and Authorization carries
+// this service's gateway token; con-ai still authenticates nobody, so a 401/403 on
+// these hops is the gateway refusing this service, never the admin's JWT. Every
+// non-2xx is returned as a *StatusError so the handler can tell a con-ai 400/404
+// (relay verbatim) from a gateway 401/403 (a credential fault of this backend).
+
+// CreateEngineer registers or, with req.Override, overwrites an O2Bar engineer
+// via POST engineer/create. A 201 carries EngineerResponse; note con-ai also
+// answers 201 with Created=false when the engineer already existed and Override
+// was not set.
+func (c *Client) CreateEngineer(ctx context.Context, jwtAssertion string, req models.EngineerCreateRequest) (*models.EngineerResponse, error) {
+	var out models.EngineerResponse
+	if err := c.doAdminJSON(ctx, http.MethodPost, "engineer/create", nil, jwtAssertion, req, &out); err != nil {
+		return nil, fmt.Errorf("aiagent: creating engineer: %w", err)
+	}
+	return &out, nil
+}
+
+// ListEngineers returns the O2Bar staff directory via GET engineers. It sends no
+// request body.
+func (c *Client) ListEngineers(ctx context.Context, jwtAssertion string) ([]models.EngineerSummary, error) {
+	var out []models.EngineerSummary
+	if err := c.doAdminJSON(ctx, http.MethodGet, "engineers", nil, jwtAssertion, nil, &out); err != nil {
+		return nil, fmt.Errorf("aiagent: listing engineers: %w", err)
+	}
+	return out, nil
+}
+
+// DeleteEngineer removes the engineer keyed on email via DELETE engineers?email=.
+// con-ai answers 204 on success and 404 when no engineer has that email; a 404
+// surfaces as a *StatusError for the handler to translate. Nothing is decoded.
+func (c *Client) DeleteEngineer(ctx context.Context, jwtAssertion, email string) error {
+	q := url.Values{"email": {email}}
+	if err := c.doAdminJSON(ctx, http.MethodDelete, "engineers", q, jwtAssertion, nil, nil); err != nil {
+		return fmt.Errorf("aiagent: deleting engineer: %w", err)
+	}
+	return nil
+}
+
+// EngineerExists reports whether email belongs to a registered O2Bar engineer
+// via GET engineer/exists?email=.
+func (c *Client) EngineerExists(ctx context.Context, jwtAssertion, email string) (*models.ExistsResponse, error) {
+	q := url.Values{"email": {email}}
+	var out models.ExistsResponse
+	if err := c.doAdminJSON(ctx, http.MethodGet, "engineer/exists", q, jwtAssertion, nil, &out); err != nil {
+		return nil, fmt.Errorf("aiagent: checking engineer exists: %w", err)
+	}
+	return &out, nil
+}
+
+// AdminCreateProfile registers or, with req.Override, overwrites an arbitrary
+// attendee's researched profile via POST profile/create. The email is inside
+// req.User and is not derived from the caller, which is what makes this an admin
+// operation distinct from POST /users/profile.
+func (c *Client) AdminCreateProfile(ctx context.Context, jwtAssertion string, req models.AdminProfileCreateRequest) (*models.ProfileResponse, error) {
+	var out models.ProfileResponse
+	if err := c.doAdminJSON(ctx, http.MethodPost, "profile/create", nil, jwtAssertion, req, &out); err != nil {
+		return nil, fmt.Errorf("aiagent: creating profile: %w", err)
+	}
+	return &out, nil
+}
+
+// AdminGetProfile fetches the stored profile document for email via
+// GET profile?email=. con-ai returns an open document, so it is decoded into a
+// map rather than a fixed struct; a 404 surfaces as a *StatusError.
+func (c *Client) AdminGetProfile(ctx context.Context, jwtAssertion, email string) (map[string]any, error) {
+	q := url.Values{"email": {email}}
+	var out map[string]any
+	if err := c.doAdminJSON(ctx, http.MethodGet, "profile", q, jwtAssertion, nil, &out); err != nil {
+		return nil, fmt.Errorf("aiagent: getting profile: %w", err)
+	}
+	return out, nil
+}
+
+// AdminUpdateProfile re-embeds an attendee's profile around fresh LinkedIn text
+// via PATCH profile?email=. Like the GET, the response is an open document.
+func (c *Client) AdminUpdateProfile(ctx context.Context, jwtAssertion, email string, req models.AdminProfileUpdateRequest) (map[string]any, error) {
+	q := url.Values{"email": {email}}
+	var out map[string]any
+	if err := c.doAdminJSON(ctx, http.MethodPatch, "profile", q, jwtAssertion, req, &out); err != nil {
+		return nil, fmt.Errorf("aiagent: updating profile: %w", err)
+	}
+	return out, nil
+}
+
+// AdminDeleteProfile removes an attendee's profile via DELETE profile?email=.
+// con-ai answers 204 on success and 404 when none exists; nothing is decoded.
+func (c *Client) AdminDeleteProfile(ctx context.Context, jwtAssertion, email string) error {
+	q := url.Values{"email": {email}}
+	if err := c.doAdminJSON(ctx, http.MethodDelete, "profile", q, jwtAssertion, nil, nil); err != nil {
+		return fmt.Errorf("aiagent: deleting profile: %w", err)
+	}
+	return nil
+}
+
+// ProfileExists reports whether email has a stored attendee profile via
+// GET profile/exists?email=.
+func (c *Client) ProfileExists(ctx context.Context, jwtAssertion, email string) (*models.ExistsResponse, error) {
+	q := url.Values{"email": {email}}
+	var out models.ExistsResponse
+	if err := c.doAdminJSON(ctx, http.MethodGet, "profile/exists", q, jwtAssertion, nil, &out); err != nil {
+		return nil, fmt.Errorf("aiagent: checking profile exists: %w", err)
+	}
+	return &out, nil
+}
+
+// doAdminJSON is the shared transport for the admin AI-management calls. It
+// generalizes doJSON along the two axes those calls need and the recommend/chat
+// calls never did: an arbitrary HTTP method and an optional query string. body is
+// JSON-encoded when non-nil and omitted entirely otherwise -- a GET or DELETE
+// sends no body, matching what con-ai's routes expect. out may be nil for a call
+// whose success carries no body (a 204 from DELETE), in which case a 2xx response
+// body is drained and discarded rather than decoded. Every non-2xx becomes a
+// *StatusError, exactly as doJSON does, so a con-ai 400/404 and a gateway 401/403
+// stay distinguishable at the handler.
+func (c *Client) doAdminJSON(ctx context.Context, method, path string, query url.Values, jwtAssertion string, body, out any) error {
+	var bodyReader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encoding request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(b)
+	}
+
+	req, err := c.newRequestWithMethod(ctx, method, path, query, jwtAssertion, bodyReader)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request to %s failed: %w", req.URL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
+		return &StatusError{StatusCode: resp.StatusCode, URL: req.URL.String(), Body: string(errBody)}
+	}
+
+	if out == nil {
+		// A body-less success (204). Drain so the connection can be reused, but
+		// decode nothing.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decoding response body: %w", err)
+	}
+	return nil
+}
+
+// newRequestWithMethod builds a request for an arbitrary method with an optional
+// query string, and only sets Content-Type when there is a body to describe.
+// newRequest stays the POST-and-always-a-body path the recommend/chat calls rely
+// on; this is its generalization for the admin calls, sharing the same URL join,
+// Accept and x-jwt-assertion handling so the two cannot drift apart.
+func (c *Client) newRequestWithMethod(ctx context.Context, method, path string, query url.Values, jwtAssertion string, bodyReader io.Reader) (*http.Request, error) {
+	reqURL, err := url.JoinPath(c.baseURL, path)
+	if err != nil {
+		return nil, fmt.Errorf("building URL: %w", err)
+	}
+	if len(query) > 0 {
+		reqURL += "?" + query.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("building request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if bodyReader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("x-jwt-assertion", jwtAssertion)
+	return req, nil
+}

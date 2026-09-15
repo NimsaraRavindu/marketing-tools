@@ -28,7 +28,7 @@ import (
 )
 
 func TestAIAgentHandler_Chat_Unauthenticated(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
@@ -38,7 +38,7 @@ func TestAIAgentHandler_Chat_Unauthenticated(t *testing.T) {
 }
 
 func TestAIAgentHandler_Chat_MalformedBody_Returns400(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	req := httptest.NewRequest(http.MethodPost, "/assistant/chat", bytes.NewBufferString("{not json"))
@@ -51,7 +51,7 @@ func TestAIAgentHandler_Chat_MalformedBody_Returns400(t *testing.T) {
 }
 
 func TestAIAgentHandler_Chat_ClientError_Returns500(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: errBoom}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: errBoom}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
@@ -62,7 +62,7 @@ func TestAIAgentHandler_Chat_ClientError_Returns500(t *testing.T) {
 
 func TestAIAgentHandler_Chat_ForwardsRequestVerbatimAndReturns201(t *testing.T) {
 	client := &fakeAIAgentClient{chatResp: &models.ChatResponse{Response: "hello", Suggestions: []string{"s1"}}}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	req := models.ChatRequest{
@@ -89,7 +89,7 @@ func TestAIAgentHandler_Chat_ForwardsRequestVerbatimAndReturns201(t *testing.T) 
 
 func TestAIAgentHandler_Chat_FeatureDisabled_Returns503(t *testing.T) {
 	client := &fakeAIAgentClient{chatErr: errBoom}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{EnabledChatAssistant: false}, nil)
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{EnabledChatAssistant: false}, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
