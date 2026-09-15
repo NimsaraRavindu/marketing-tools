@@ -162,6 +162,17 @@ type Config struct {
 	TokenValidatorEnabled bool
 	AdminRoles            []string
 
+	// AIAdminRoles is the allow-list of JWT `groups` permitted to manage the
+	// AI corpora directly: registering/removing O2Bar engineers and
+	// creating/overwriting attendee AI profiles (the /admin/o2bar/engineers*
+	// and /admin/ai-profiles* routes). Kept separate from AdminRoles because
+	// these routes write into every attendee's recommendations -- con-ai
+	// performs no authorisation of its own, so this list is the only gate --
+	// and that is a narrower trust than the notification broadcast. Empty
+	// DENIES every caller rather than opening the routes up, so an unset value
+	// looks like a closed route, not an open one.
+	AIAdminRoles []string
+
 	// WSO2 Coin / O2C feature flags
 	ExcludeEmployeeCoinAllocation bool
 	EnableQrValidations           bool
@@ -344,6 +355,7 @@ func Load() Config {
 		Audiences:             parseList(os.Getenv("JWT_AUDIENCE")),
 		TokenValidatorEnabled: tokenValidatorEnabled,
 		AdminRoles:            parseList(os.Getenv("RBAC_ADMIN_ROLES")),
+		AIAdminRoles:          parseList(os.Getenv("AI_ADMIN_ROLES")),
 
 		ExcludeEmployeeCoinAllocation:    excludeEmployeeCoinAllocation,
 		EnableQrValidations:              enableQrValidations,
@@ -492,8 +504,8 @@ func (c Config) Validate() error {
 	if c.RegistrantService.Endpoint == "" {
 		return errors.New("REGISTRANT_SERVICE_URL is required")
 	}
-	// Note: We skip checking REGISTRANT_CLIENT_ID etc here because for local dev 
-	// they can be entirely blank. The proxy handler will simply skip fetching a token 
+	// Note: We skip checking REGISTRANT_CLIENT_ID etc here because for local dev
+	// they can be entirely blank. The proxy handler will simply skip fetching a token
 	// if they are missing, allowing local localhost testing to proceed smoothly.
 
 	if c.DBHost == "" {

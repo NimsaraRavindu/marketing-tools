@@ -17,6 +17,7 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"encoding/base64"
@@ -45,10 +46,14 @@ type UserInfo struct {
 	UserID     string // JWT sub claim
 	GivenName  string
 	FamilyName string
-	// Groups is the JWT groups claim, the IdP's role memberships for this
-	// user. Only admin-gated routes read it (see HasAnyGroup); an absent
+	// Groups and Roles are the IdP's membership claims for this user. Which
+	// one an Asgardeo application emits is a per-application attribute-mapping
+	// choice, not something this backend controls: some apps stamp `groups`,
+	// others stamp `roles` (and never both), so the admin-gate check consults
+	// both (see HasAnyGroup). Only admin-gated routes read them; an absent
 	// claim yields nil, which denies rather than allows.
 	Groups []string
+	Roles  []string
 	// RawToken is the literal incoming x-jwt-assertion value, before any
 	// parsing. The AI agent routes forward it as the caller's identity ("who
 	// is asking"); the credential that gets them past the AI service's
@@ -58,13 +63,23 @@ type UserInfo struct {
 	RawToken string
 }
 
-// HasAnyGroup reports whether the user belongs to at least one of want.
+// HasAnyGroup reports whether the user belongs to at least one of want,
+// matching against BOTH the `groups` and `roles` claims. An admin allow-list
+// is configured as plain names (RBAC_ADMIN_ROLES / AI_ADMIN_ROLES); whether
+// the deploying Asgardeo application delivers those names in `groups` or in
+// `roles` is its own attribute-mapping decision, so checking only one claim
+// would 403 a legitimately-entitled caller whose app happens to use the other.
 // An empty want denies: an admin-gated route whose allow-list was never
 // configured must not fall open to every authenticated caller.
 func (u *UserInfo) HasAnyGroup(want []string) bool {
 	for _, w := range want {
 		for _, g := range u.Groups {
 			if g == w {
+				return true
+			}
+		}
+		for _, r := range u.Roles {
+			if r == w {
 				return true
 			}
 		}
@@ -89,11 +104,42 @@ type AuthConfig struct {
 }
 
 type jwtClaims struct {
-	Email                string   `json:"email"`
-	GivenName            string   `json:"given_name"`
-	FamilyName           string   `json:"family_name"`
-	Groups               []string `json:"groups"`
-	jwt.RegisteredClaims          // Sub carries the user UUID
+	Email                string             `json:"email"`
+	GivenName            string             `json:"given_name"`
+	FamilyName           string             `json:"family_name"`
+	Groups               flexibleStringList `json:"groups"`
+	Roles                flexibleStringList `json:"roles"`
+	jwt.RegisteredClaims                    // Sub carries the user UUID
+}
+
+// flexibleStringList unmarshals a JWT membership claim that Asgardeo emits as a
+// bare JSON string when the user has exactly one entry and as an array when
+// they have several. A plain []string field fails to decode the single-entry
+// string form, which would reject the whole token (turning a one-role admin
+// into a 401). Both `groups` and `roles` are decoded through this so either
+// shape is accepted.
+type flexibleStringList []string
+
+func (f *flexibleStringList) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		*f = nil
+		return nil
+	}
+	if data[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(data, &arr); err != nil {
+			return err
+		}
+		*f = arr
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	*f = []string{s}
+	return nil
 }
 
 // Auth returns a Gin middleware that validates the x-jwt-assertion header on
@@ -375,13 +421,14 @@ func extractUserInfo(tokenStr string, cfg AuthConfig, keyFunc jwt.Keyfunc) (*Use
 		return nil, fmt.Errorf("token missing sub claim")
 	}
 
-	// A missing groups claim is not an error: every route except the
-	// admin-gated ones ignores it, and those deny on an empty list anyway.
+	// A missing groups/roles claim is not an error: every route except the
+	// admin-gated ones ignores them, and those deny on an empty list anyway.
 	return &UserInfo{
 		Email:      c.Email,
 		UserID:     c.Subject,
 		GivenName:  c.GivenName,
 		FamilyName: c.FamilyName,
 		Groups:     c.Groups,
+		Roles:      c.Roles,
 	}, nil
 }

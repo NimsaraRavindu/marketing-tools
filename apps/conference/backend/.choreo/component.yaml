@@ -36,6 +36,15 @@ schemaVersion: 1.2
 # and AI_TOKEN_URL all three or none -- a partial set fails at startup.
 # AI_SERVICE_URL is separate from that rule and is always required.
 #
+# The admin AI-management routes gate on their own group list, kept separate from
+# RBAC_ADMIN_ROLES because they write into every attendee's recommendations and
+# con-ai enforces no authorisation of its own -- this list is the only gate:
+#   AI_ADMIN_ROLES     comma-separated JWT `groups` values allowed to manage the
+#                      O2Bar engineer roster (POST/GET/DELETE /admin/o2bar/
+#                      engineers, GET /admin/o2bar/engineers/exists) and attendee
+#                      AI profiles (POST/GET/PATCH/DELETE /admin/ai-profiles, GET
+#                      /admin/ai-profiles/exists). Empty DENIES every caller.
+#
 # This file carries these as comments only: it declares no `configurations:`
 # entries, so nothing here sets the variables. They must still be entered by
 # hand in the Choreo console.

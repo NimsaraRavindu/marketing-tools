@@ -27,7 +27,7 @@ import (
 )
 
 func TestAIAgentHandler_AgendaRecommendations_Unauthenticated(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodGet, "/agenda/recommendations", nil)
@@ -37,7 +37,7 @@ func TestAIAgentHandler_AgendaRecommendations_Unauthenticated(t *testing.T) {
 }
 
 func TestAIAgentHandler_AgendaRecommendations_ClientError_Returns500(t *testing.T) {
-	h := NewAIAgentHandler(&fakeAIAgentClient{agendaErr: errBoom}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{agendaErr: errBoom}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/agenda/recommendations", nil)
@@ -58,7 +58,7 @@ func (f *fakeSessionDayReader) DayIDsForSessions(ctx context.Context, ids []stri
 func TestAIAgentHandler_AgendaRecommendations_DayAssociatesSessions(t *testing.T) {
 	recs := []models.PickedForYouSession{{ID: "s-1", Title: "One"}, {ID: "s-2", Title: "Two"}}
 	reader := &fakeSessionDayReader{days: map[string]string{"s-1": "day-A"}}
-	h := NewAIAgentHandler(&fakeAIAgentClient{agenda: recs}, &fakeAttendeeRepo{}, allAIFeaturesOn, reader)
+	h := NewAIAgentHandler(&fakeAIAgentClient{agenda: recs}, &fakeAttendeeRepo{}, allAIFeaturesOn, reader, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/agenda/recommendations", nil)
@@ -84,7 +84,7 @@ func TestAIAgentHandler_AgendaRecommendations_DayAssociatesSessions(t *testing.T
 func TestAIAgentHandler_AgendaRecommendations_EnrichmentErrorStillReturns200(t *testing.T) {
 	recs := []models.PickedForYouSession{{ID: "s-1"}}
 	reader := &fakeSessionDayReader{err: errBoom}
-	h := NewAIAgentHandler(&fakeAIAgentClient{agenda: recs}, &fakeAttendeeRepo{}, allAIFeaturesOn, reader)
+	h := NewAIAgentHandler(&fakeAIAgentClient{agenda: recs}, &fakeAttendeeRepo{}, allAIFeaturesOn, reader, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/agenda/recommendations", nil)
@@ -102,7 +102,7 @@ func TestAIAgentHandler_AgendaRecommendations_EnrichmentErrorStillReturns200(t *
 
 func TestAIAgentHandler_AgendaRecommendations_ReturnsSessionsAsIs(t *testing.T) {
 	want := []models.PickedForYouSession{{ID: "s-1", Title: "T", PersonalizedDescription: "d"}}
-	h := NewAIAgentHandler(&fakeAIAgentClient{agenda: want}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{agenda: want}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/agenda/recommendations", nil)
@@ -120,7 +120,7 @@ func TestAIAgentHandler_AgendaRecommendations_ReturnsSessionsAsIs(t *testing.T) 
 
 func TestAIAgentHandler_AgendaRecommendations_FeatureDisabled_Returns503(t *testing.T) {
 	client := &fakeAIAgentClient{agendaErr: errBoom}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{EnabledPersonalizedAgenda: false}, nil)
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, config.AIFeatureStatus{EnabledPersonalizedAgenda: false}, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodGet, "/agenda/recommendations", nil)

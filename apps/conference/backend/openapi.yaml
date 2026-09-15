@@ -1605,6 +1605,339 @@ paths:
         '201':
           description: Created
 
+  /admin/o2bar/engineers:
+    post:
+      tags: [o2bar]
+      summary: Register or overwrite an O2Bar engineer (admin only)
+      description: >
+        Adds an engineer to the O2Bar roster, putting them into every attendee's
+        recommendations. Restricted to callers in one of the AI_ADMIN_ROLES
+        groups; con-ai enforces nothing, so this group check is the only gate.
+        con-ai answers 201 even for an already-exists no-op, so a 201 does not by
+        itself mean a new row -- read the `created` flag. A malformed time-slot or
+        other bad field is relayed as a 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EngineerCreateRequest" }
+      responses:
+        "201":
+          description: "Registered (or overwritten). `created` says which."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EngineerResponse" }
+        "400": { description: "Invalid request body or a rejected engineer field." }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    get:
+      tags: [o2bar]
+      summary: List O2Bar engineers (admin only)
+      description: >
+        The O2Bar staff directory with each engineer's availability. Restricted
+        to AI_ADMIN_ROLES. Returns [] (never null) when the roster is empty.
+      responses:
+        "200":
+          description: "The roster."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EngineerSummary" }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/o2bar/engineers/{email}:
+    delete:
+      tags: [o2bar]
+      summary: Remove an O2Bar engineer (admin only)
+      description: >
+        Removes an engineer from every attendee's recommendations. Restricted to
+        AI_ADMIN_ROLES.
+      parameters:
+        - name: email
+          in: path
+          required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
+          schema: { type: string, format: email }
+      responses:
+        "204": { description: "Removed. No body." }
+        "400": { description: "The email path segment is blank." }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "404": { description: "No engineer holds that email." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/o2bar/engineers/{email}/exists:
+    get:
+      tags: [o2bar]
+      summary: Whether an address is an O2Bar engineer (admin only)
+      description: Restricted to AI_ADMIN_ROLES.
+      parameters:
+        - name: email
+          in: path
+          required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
+          schema: { type: string, format: email }
+      responses:
+        "200":
+          description: "Existence answer."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExistsResponse" }
+        "400": { description: "The email path segment is blank." }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/ai-profiles:
+    post:
+      tags: [personalize]
+      summary: Create or replace an attendee's AI profile (admin only)
+      description: >
+        Writes the researched AI profile that feeds an arbitrary attendee's
+        matchmaking and picked-for-you recommendations. Unlike POST /users/profile
+        (which keys on the caller's own JWT email), the target attendee's email
+        rides in the body. Restricted to AI_ADMIN_ROLES.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminProfileCreateRequest" }
+      responses:
+        "201":
+          description: "Created (or replaced). `created` says which."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileResponse" }
+        "400": { description: "Invalid body, or user.email is missing." }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/ai-profiles/{email}:
+    get:
+      tags: [personalize]
+      summary: Fetch an attendee's stored AI profile (admin only)
+      description: Restricted to AI_ADMIN_ROLES. The profile document is relayed as-is.
+      parameters:
+        - name: email
+          in: path
+          required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
+          schema: { type: string, format: email }
+      responses:
+        "200":
+          description: "The stored profile document."
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400": { description: "The email path segment is blank." }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "404": { description: "No profile stored for that email." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    patch:
+      tags: [personalize]
+      summary: Re-embed an attendee's AI profile from fresh LinkedIn text (admin only)
+      description: Restricted to AI_ADMIN_ROLES.
+      parameters:
+        - name: email
+          in: path
+          required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
+          schema: { type: string, format: email }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminProfileUpdateRequest" }
+      responses:
+        "200":
+          description: "Updated profile document."
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400": { description: "Invalid body, or the email query parameter is missing." }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "404": { description: "No profile stored for that email." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    delete:
+      tags: [personalize]
+      summary: Delete an attendee's AI profile (admin only)
+      description: Restricted to AI_ADMIN_ROLES.
+      parameters:
+        - name: email
+          in: path
+          required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
+          schema: { type: string, format: email }
+      responses:
+        "204": { description: "Deleted. No body." }
+        "400": { description: "The email path segment is blank." }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "404": { description: "No profile stored for that email." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /admin/ai-profiles/{email}/exists:
+    get:
+      tags: [personalize]
+      summary: Whether an attendee has a stored AI profile (admin only)
+      description: Restricted to AI_ADMIN_ROLES.
+      parameters:
+        - name: email
+          in: path
+          required: true
+          description: >-
+            The attendee or engineer address. "@" and "." need no escaping in a
+            path segment, but a percent-encoded address routes identically.
+          schema: { type: string, format: email }
+      responses:
+        "200":
+          description: "Existence answer."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExistsResponse" }
+        "400": { description: "The email path segment is blank." }
+        "401": { description: "Missing authentication." }
+        "403": { description: "Caller is not in an AI_ADMIN_ROLES group." }
+        "500":
+          description: >-
+            The AI service returned an unexpected error, or its gateway refused
+            this backend's own credentials. Retrying the same request will not
+            help.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: >-
+            The AI service could not be reached or timed out. Retriable -- the
+            request never got as far as being rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
 components:
   securitySchemes:
     jwtAssertion:
@@ -1612,6 +1945,100 @@ components:
       in: header
       name: x-jwt-assertion
   schemas:
+    EngineerProfileInput:
+      type: object
+      description: One O2Bar engineer's expertise and availability, mirroring con-ai's EngineerCreate.
+      required: [email, name, title, domains, familiarProducts, specializeAreas, yearsOfWorkingExperience, exampleQuestions, availableTimeSlots]
+      properties:
+        email: { type: string, format: email }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        linkedInProfileUrl: { type: string }
+        domains: { type: string, minLength: 1 }
+        familiarProducts: { type: string, minLength: 1 }
+        specializeAreas: { type: string, minLength: 1 }
+        yearsOfWorkingExperience: { type: integer, minimum: 0, maximum: 60 }
+        exampleQuestions: { type: string, minLength: 1 }
+        availableTimeSlots:
+          type: string
+          description: >
+            Slots separated by newlines, commas or semicolons. Each slot needs a
+            date: YYYY-MM-DD HH:mm-HH:mm (or a pair of ISO-8601 timestamps). An
+            undated slot is rejected upstream (a 400), because an undated slot is
+            silently dropped the next day and the engineer vanishes from every
+            recommendation.
+    EngineerCreateRequest:
+      type: object
+      required: [engineer]
+      properties:
+        engineer: { $ref: "#/components/schemas/EngineerProfileInput" }
+        override:
+          type: boolean
+          default: false
+          description: When true, overwrite an existing engineer's expertise and availability outright.
+    EngineerResponse:
+      type: object
+      required: [email, created, message]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        created: { type: boolean, description: "False (with an explanatory message) when the engineer already existed and override was not set." }
+        message: { type: string }
+    EngineerSummary:
+      type: object
+      required: [email, name]
+      properties:
+        email: { type: string }
+        name: { type: string }
+        title: { type: string }
+        linkedInProfileUrl: { type: string }
+        availableTimeSlots:
+          type: array
+          items: { $ref: "#/components/schemas/O2BarTimeSlot" }
+    AdminProfileCreateRequest:
+      type: object
+      description: >
+        Admin attendee-profile create. Unlike PersonalizedProfileRequest, the
+        `user.email` here is the target attendee and is NOT overwritten -- it is
+        the key con-ai upserts on, so it is required.
+      required: [user]
+      properties:
+        user:
+          type: object
+          required: [email]
+          properties:
+            email: { type: string, format: email, description: "The target attendee. NOT overwritten (unlike POST /users/profile)." }
+            name: { type: string }
+            company: { type: string }
+            title: { type: string }
+            country: { type: string }
+            linkedInInfo: { type: string, description: "Free text harvested from LinkedIn (note casing: capital I in In)." }
+        override:
+          type: boolean
+          default: false
+          description: When true, replace the attendee's existing profile document.
+    AdminProfileUpdateRequest:
+      type: object
+      required: [linkedInInfo]
+      properties:
+        linkedInInfo: { type: string, minLength: 1 }
+    ProfileResponse:
+      type: object
+      required: [email, created, message]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        company: { type: string }
+        title: { type: string }
+        created: { type: boolean }
+        message: { type: string }
+    ExistsResponse:
+      type: object
+      required: [exists]
+      properties:
+        exists: { type: boolean }
     Session:
       type: object
       required: [id, kind, title, durationSlots, colorToken]

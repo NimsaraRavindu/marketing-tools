@@ -481,3 +481,119 @@ func TestAudienceAllowed_ErrorMessageNamesBothSides(t *testing.T) {
 		}
 	}
 }
+
+// rawUnverifiedToken builds a token from a literal JSON payload so a claim can
+// be given a shape the typed jwtClaims marshaller would never produce -- here,
+// the `roles` claim as a bare string rather than an array. The signature is
+// unused: these tests run the middleware with TokenValidatorEnabled=false.
+func rawUnverifiedToken(t *testing.T, payloadJSON string) string {
+	t.Helper()
+	enc := func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+	header := enc([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	body := enc([]byte(payloadJSON))
+	return header + "." + body + ".unused-signature"
+}
+
+func TestFlexibleStringList_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"single string becomes one-element list", `"event-admin-stg"`, []string{"event-admin-stg"}},
+		{"array stays an array", `["event-shop-user-stg","event-admin-stg"]`, []string{"event-shop-user-stg", "event-admin-stg"}},
+		{"null becomes nil", `null`, nil},
+		{"empty array becomes empty", `[]`, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var f flexibleStringList
+			if err := json.Unmarshal([]byte(tt.in), &f); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.in, err)
+			}
+			if len(f) != len(tt.want) {
+				t.Fatalf("len = %d (%v), want %d (%v)", len(f), f, len(tt.want), tt.want)
+			}
+			for i := range tt.want {
+				if f[i] != tt.want[i] {
+					t.Errorf("[%d] = %q, want %q", i, f[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// The real staging admin application stamps a `roles` claim (not `groups`), and
+// renders it as a bare string when the user holds a single role. Both shapes
+// must populate UserInfo.Roles so the admin gate authorises the caller.
+func TestAuth_UnverifiedMode_ExtractsRolesClaim(t *testing.T) {
+	newRouter := func(capture *(*UserInfo)) *gin.Engine {
+		r := gin.New()
+		r.Use(Auth(AuthConfig{TokenValidatorEnabled: false}))
+		r.GET("/ping", func(c *gin.Context) {
+			*capture = UserInfoFromContext(c.Request.Context())
+			c.Status(http.StatusOK)
+		})
+		return r
+	}
+
+	t.Run("roles as array", func(t *testing.T) {
+		var got *UserInfo
+		token := unverifiedToken(t, jwtClaims{
+			Email:            "admin@example.com",
+			Roles:            flexibleStringList{"event-shop-user-stg", "event-admin-stg"},
+			RegisteredClaims: jwt.RegisteredClaims{Subject: "user-uuid-123"},
+		})
+		req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+		req.Header.Set(jwtAssertionHeader, token)
+		w := httptest.NewRecorder()
+		newRouter(&got).ServeHTTP(w, req)
+		if w.Code != http.StatusOK || got == nil {
+			t.Fatalf("code=%d got=%v", w.Code, got)
+		}
+		if !got.HasAnyGroup([]string{"event-admin-stg"}) {
+			t.Errorf("HasAnyGroup did not match role; Roles=%v", got.Roles)
+		}
+	})
+
+	t.Run("roles as single string", func(t *testing.T) {
+		var got *UserInfo
+		token := rawUnverifiedToken(t, `{"email":"admin@example.com","sub":"user-uuid-123","roles":"event-admin-stg"}`)
+		req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+		req.Header.Set(jwtAssertionHeader, token)
+		w := httptest.NewRecorder()
+		newRouter(&got).ServeHTTP(w, req)
+		if w.Code != http.StatusOK || got == nil {
+			t.Fatalf("code=%d got=%v", w.Code, got)
+		}
+		if len(got.Roles) != 1 || got.Roles[0] != "event-admin-stg" {
+			t.Fatalf("Roles = %v, want [event-admin-stg]", got.Roles)
+		}
+		if !got.HasAnyGroup([]string{"event-admin-stg"}) {
+			t.Error("HasAnyGroup did not match single-string role")
+		}
+	})
+}
+
+func TestUserInfo_HasAnyGroup_MatchesRolesOrGroups(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups []string
+		roles  []string
+		want   []string
+		expect bool
+	}{
+		{"matches via roles when groups empty", nil, []string{"event-admin-stg"}, []string{"event-admin-stg"}, true},
+		{"matches via groups when roles empty", []string{"app-con-registrant-admin"}, nil, []string{"app-con-registrant-admin"}, true},
+		{"no match in either", []string{"g"}, []string{"r"}, []string{"x"}, false},
+		{"empty allow-list denies even with roles", nil, []string{"event-admin-stg"}, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := &UserInfo{Groups: tt.groups, Roles: tt.roles}
+			if got := u.HasAnyGroup(tt.want); got != tt.expect {
+				t.Errorf("HasAnyGroup(%v) groups=%v roles=%v = %v, want %v", tt.want, tt.groups, tt.roles, got, tt.expect)
+			}
+		})
+	}
+}

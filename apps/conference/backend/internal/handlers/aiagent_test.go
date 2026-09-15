@@ -69,6 +69,30 @@ type fakeAIAgentClient struct {
 	chatErr     error
 	chatReqSeen models.ChatRequest
 
+	// Admin management doubles.
+	engineerResp      *models.EngineerResponse
+	engineerErr       error
+	engineerSeen      models.EngineerCreateRequest
+	engineers         []models.EngineerSummary
+	listEngineersErr  error
+	deleteEngineerErr error
+	engineerExists    *models.ExistsResponse
+	engineerExistsErr error
+
+	adminProfileResp      *models.ProfileResponse
+	adminProfileErr       error
+	adminProfileSeen      models.AdminProfileCreateRequest
+	adminGetProfile       map[string]any
+	adminGetProfileErr    error
+	adminUpdateProfile    map[string]any
+	adminUpdateProfileErr error
+	adminUpdateSeen       models.AdminProfileUpdateRequest
+	adminDeleteProfileErr error
+	profileExists         *models.ExistsResponse
+	profileExistsErr      error
+
+	emailSeen string
+
 	jwtSeen string
 }
 
@@ -100,6 +124,60 @@ func (f *fakeAIAgentClient) RetrieveChatResponse(ctx context.Context, jwtAsserti
 	return f.chatResp, f.chatErr
 }
 
+func (f *fakeAIAgentClient) CreateEngineer(ctx context.Context, jwtAssertion string, req models.EngineerCreateRequest) (*models.EngineerResponse, error) {
+	f.jwtSeen = jwtAssertion
+	f.engineerSeen = req
+	return f.engineerResp, f.engineerErr
+}
+
+func (f *fakeAIAgentClient) ListEngineers(ctx context.Context, jwtAssertion string) ([]models.EngineerSummary, error) {
+	f.jwtSeen = jwtAssertion
+	return f.engineers, f.listEngineersErr
+}
+
+func (f *fakeAIAgentClient) DeleteEngineer(ctx context.Context, jwtAssertion, email string) error {
+	f.jwtSeen = jwtAssertion
+	f.emailSeen = email
+	return f.deleteEngineerErr
+}
+
+func (f *fakeAIAgentClient) EngineerExists(ctx context.Context, jwtAssertion, email string) (*models.ExistsResponse, error) {
+	f.jwtSeen = jwtAssertion
+	f.emailSeen = email
+	return f.engineerExists, f.engineerExistsErr
+}
+
+func (f *fakeAIAgentClient) AdminCreateProfile(ctx context.Context, jwtAssertion string, req models.AdminProfileCreateRequest) (*models.ProfileResponse, error) {
+	f.jwtSeen = jwtAssertion
+	f.adminProfileSeen = req
+	return f.adminProfileResp, f.adminProfileErr
+}
+
+func (f *fakeAIAgentClient) AdminGetProfile(ctx context.Context, jwtAssertion, email string) (map[string]any, error) {
+	f.jwtSeen = jwtAssertion
+	f.emailSeen = email
+	return f.adminGetProfile, f.adminGetProfileErr
+}
+
+func (f *fakeAIAgentClient) AdminUpdateProfile(ctx context.Context, jwtAssertion, email string, req models.AdminProfileUpdateRequest) (map[string]any, error) {
+	f.jwtSeen = jwtAssertion
+	f.emailSeen = email
+	f.adminUpdateSeen = req
+	return f.adminUpdateProfile, f.adminUpdateProfileErr
+}
+
+func (f *fakeAIAgentClient) AdminDeleteProfile(ctx context.Context, jwtAssertion, email string) error {
+	f.jwtSeen = jwtAssertion
+	f.emailSeen = email
+	return f.adminDeleteProfileErr
+}
+
+func (f *fakeAIAgentClient) ProfileExists(ctx context.Context, jwtAssertion, email string) (*models.ExistsResponse, error) {
+	f.jwtSeen = jwtAssertion
+	f.emailSeen = email
+	return f.profileExists, f.profileExistsErr
+}
+
 func newAIAgentTestRouter(h *AIAgentHandler, user *middleware.UserInfo) *gin.Engine {
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -126,7 +204,7 @@ func TestAIAgentHandler_MaintenanceStatus_EchoesConfiguredFlags(t *testing.T) {
 		EnabledMatchMaker:         true,
 		EnabledO2Bar:              false,
 	}
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, status, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, status, nil, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	w := doRequest(r, http.MethodGet, "/ai-maintenance-status", nil)
@@ -147,7 +225,7 @@ func TestAIAgentHandler_MaintenanceStatus_EchoesConfiguredFlags(t *testing.T) {
 func TestAIAgentHandler_MaintenanceStatus_NoAuthRequired(t *testing.T) {
 	// This route has no context param at all in the old code -- unlike
 	// every other AI route, it works with no authenticated user in context.
-	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{}, &fakeAttendeeRepo{}, config.AIFeatureStatus{}, nil, nil)
 	r := newAIAgentTestRouter(h, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ai-maintenance-status", nil)
@@ -234,7 +312,7 @@ func TestAIAgentHandler_UpstreamUnauthorized_NamesCauseInLogMessage(t *testing.T
 		URL:        "https://ai.example.com/assistant/chat",
 		Body:       `{"error_message":"Invalid Credentials","code":"900901"}`,
 	}
-	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: err}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: err}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
@@ -264,7 +342,7 @@ func TestAIAgentHandler_UpstreamUnauthorized_DoesNotLeakUpstreamBody(t *testing.
 		URL:        "https://ai.example.com/assistant/chat",
 		Body:       `{"error_message":"Invalid Credentials","code":"900901"}`,
 	}
-	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: err}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: err}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
@@ -279,7 +357,7 @@ func TestAIAgentHandler_UpstreamUnauthorized_DoesNotLeakUpstreamBody(t *testing.
 func TestAIAgentHandler_UnreachableService_Returns503(t *testing.T) {
 	captureAILogs(t)
 	err := &url.Error{Op: "Post", URL: "https://ai.example.com/assistant/chat", Err: errBoom}
-	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: err}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: err}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
@@ -316,7 +394,7 @@ func tokenFetchError(status int) error {
 func TestAIAgentHandler_TokenRejected_Returns500WithCredentialHint(t *testing.T) {
 	logs := captureAILogs(t)
 	client := &fakeAIAgentClient{chatErr: tokenFetchError(http.StatusUnauthorized)}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
@@ -347,7 +425,7 @@ func TestAIAgentHandler_TokenRejected_Returns500WithCredentialHint(t *testing.T)
 func TestAIAgentHandler_TokenThrottled_Returns503WithoutCredentialHint(t *testing.T) {
 	logs := captureAILogs(t)
 	client := &fakeAIAgentClient{chatErr: tokenFetchError(http.StatusTooManyRequests)}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
@@ -370,7 +448,7 @@ func TestAIAgentHandler_TokenThrottled_Returns503WithoutCredentialHint(t *testin
 func TestAIAgentHandler_TokenEndpointDown_Returns503(t *testing.T) {
 	captureAILogs(t)
 	client := &fakeAIAgentClient{chatErr: tokenFetchError(http.StatusBadGateway)}
-	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(client, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})
@@ -391,7 +469,7 @@ func TestAIAgentHandler_UpstreamForbidden_NamesCauseInLogMessage(t *testing.T) {
 		URL:        "https://ai.example.com/assistant/chat",
 		Body:       `{"error_message":"Resource forbidden","code":"900908"}`,
 	}
-	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: err}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil)
+	h := NewAIAgentHandler(&fakeAIAgentClient{chatErr: err}, &fakeAttendeeRepo{}, allAIFeaturesOn, nil, nil)
 	r := newAIAgentTestRouter(h, testUser)
 
 	w := doRequest(r, http.MethodPost, "/assistant/chat", models.ChatRequest{Question: "hi"})

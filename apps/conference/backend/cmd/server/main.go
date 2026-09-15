@@ -187,11 +187,11 @@ func main() {
 	)
 
 	shopService := service.NewShopService(shopRepo, transactionClient, emailClient, service.ShopConfig{
-		MasterWalletAddress: cfg.ShopMasterWalletAddress,
+		MasterWalletAddress:              cfg.ShopMasterWalletAddress,
 		StaleOrderCleanupIntervalSeconds: cfg.StaleOrderCleanupIntervalSeconds,
-		CoinStaleOrderTimeoutMinutes: cfg.CoinStaleOrderTimeoutMinutes,
+		CoinStaleOrderTimeoutMinutes:     cfg.CoinStaleOrderTimeoutMinutes,
 	})
-	
+
 	// Start the cron job for cancelling stale shop orders
 	go shopService.Start(context.Background())
 	coinHandler := handlers.NewCoinHandler(coinService, coinAllocationRepo, qrPortalClient, eventRepo, cfg.AdminRoles)
@@ -207,7 +207,7 @@ func main() {
 	activityHandler := handlers.NewActivityHandler(activityRepo)
 	shopHandler := handlers.NewShopHandler(shopService)
 	walletHandler := handlers.NewWalletHandler(walletClient, transactionClient)
-	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo)
+	aiAgentHandler := handlers.NewAIAgentHandler(aiAgentClient, attendeeProfileRepo, cfg.AIFeatureStatus, sessionRepo, cfg.AIAdminRoles)
 	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardRepo, eventRepo)
 
 	// API-usage analytics. Nop unless MOESIF_ENABLED=true, so the middleware is
@@ -340,6 +340,23 @@ func main() {
 		api.POST("/users/profile", aiAgentHandler.PersonalizedProfile)
 		api.GET("/agenda/recommendations", aiAgentHandler.AgendaRecommendations)
 		api.POST("/assistant/chat", aiAgentHandler.Chat)
+
+		// Admin AI management: O2Bar engineer roster and attendee AI profiles.
+		// Deliberately absent from the feature_gates map -- unlike the six
+		// attendee-facing AI routes these are governed solely by the RBAC check
+		// inside each handler (AI_ADMIN_ROLES), so an operator can seed the
+		// roster and profiles before the corresponding attendee features are
+		// switched on.
+		api.POST("/admin/o2bar/engineers", aiAgentHandler.CreateEngineer)
+		api.GET("/admin/o2bar/engineers", aiAgentHandler.ListEngineers)
+		api.DELETE("/admin/o2bar/engineers/:email", aiAgentHandler.DeleteEngineer)
+		api.GET("/admin/o2bar/engineers/:email/exists", aiAgentHandler.EngineerExists)
+		api.POST("/admin/ai-profiles", aiAgentHandler.AdminCreateProfile)
+		api.GET("/admin/ai-profiles/:email", aiAgentHandler.AdminGetProfile)
+		api.PATCH("/admin/ai-profiles/:email", aiAgentHandler.AdminUpdateProfile)
+		api.DELETE("/admin/ai-profiles/:email", aiAgentHandler.AdminDeleteProfile)
+		api.GET("/admin/ai-profiles/:email/exists", aiAgentHandler.ProfileExists)
+
 		// Leaderboard route
 		api.GET("/leaderboard", leaderboardHandler.GetLeaderboard)
 		api.GET("/leaderboard/preferences", leaderboardHandler.GetPreferences)
