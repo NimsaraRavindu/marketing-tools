@@ -25,24 +25,15 @@ import (
 	"attendee-registration/internal/crypto"
 )
 
-// GetAgendas returns the conference days and scan-enabled activities for the
-// given event (a conference_config id). These are returned as a unified list
+// GetAgendas returns the dropdown options for the
+// given event (a conference_config id). These are returned as a list
 // of text labels (e.g. "Day 1", "O2 Bar") that act as primary keys for attendance.
 func (r *Repository) GetAgendas(ctx context.Context, eventID string) ([]Agenda, error) {
 	const q = `
-		SELECT id, name, date FROM (
-			SELECT label AS id, label AS name, date, 1 AS sort_order
-			FROM conference_days
-			WHERE config_id = $1
-			
-			UNION ALL
-			
-			SELECT a.name AS id, a.name AS name, c.start_date AS date, 2 AS sort_order
-			FROM con_activities a
-			JOIN conference_config c ON a.config_id = c.id
-			WHERE a.config_id = $1 AND a.scan_enabled = true
-		) combined
-		ORDER BY sort_order ASC, date ASC, name ASC`
+		SELECT name AS id, name, created_at AS date
+		FROM registrant_dropdown_options
+		WHERE config_id = $1
+		ORDER BY created_at ASC`
 
 	rows, err := r.db.QueryContext(ctx, q, eventID)
 	if err != nil {
