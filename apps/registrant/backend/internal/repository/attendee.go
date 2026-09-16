@@ -37,11 +37,9 @@ func (r *Repository) GetAttendeeSummary(ctx context.Context) ([]AttendeeSummary,
 			ar.updated_by AS scannedBy
 		FROM
 			attendee_registration ar
-			LEFT JOIN conference_days d ON ar.day_label = d.label
-			LEFT JOIN con_activities a ON ar.day_label = a.name
+			LEFT JOIN registrant_dropdown_options rdo ON ar.day_label = rdo.name
 		WHERE
-			d.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
-			OR a.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
+			rdo.config_id = (SELECT id FROM conference_config ORDER BY start_date DESC LIMIT 1)
 		ORDER BY
 			ar.day_label ASC`
 
